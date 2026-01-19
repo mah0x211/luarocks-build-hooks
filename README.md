@@ -1,7 +1,7 @@
-# luarocks-build-builtin-hook
+# luarocks-build-hooks
 
-[![test](https://github.com/mah0x211/luarocks-build-builtin-hook/actions/workflows/test.yml/badge.svg)](https://github.com/mah0x211/luarocks-build-builtin-hook/actions/workflows/test.yml)
-[![codecov](https://codecov.io/gh/mah0x211/luarocks-build-builtin-hook/branch/master/graph/badge.svg)](https://codecov.io/gh/mah0x211/luarocks-build-builtin-hook)
+[![test](https://github.com/mah0x211/luarocks-build-hooks/actions/workflows/test.yml/badge.svg)](https://github.com/mah0x211/luarocks-build-hooks/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/mah0x211/luarocks-build-hooks/branch/master/graph/badge.svg)](https://codecov.io/gh/mah0x211/luarocks-build-hooks)
 
 
 A custom build backend for LuaRocks that extends the standard `builtin` backend with support for executing Lua scripts before and after the build process.
@@ -16,13 +16,13 @@ A custom build backend for LuaRocks that extends the standard `builtin` backend 
 ## Installation
 
 ```bash
-luarocks install luarocks-build-builtin-hook
+luarocks install luarocks-build-hooks
 ```
 
 
 ## Usage
 
-Utilize `build_dependencies` to ensure this backend is available during the build process, and specify `build.type = "builtin-hook"` in your rockspec.
+Utilize `build_dependencies` to ensure this backend is available during the build process, and specify `build.type = "hooks"` in your rockspec.
 
 
 ### Example Rockspec
@@ -34,12 +34,11 @@ version = "1.0-1"
 
 -- Add this module to build_dependencies
 build_dependencies = {
-   "luarocks-build-builtin-hook"
+   "luarocks-build-hooks"
 }
 
 build = {
-   type = "builtin-hook",
-
+   type = "hooks",
    -- Standard builtin modules definition
    modules = {
       ["my.module"] = "src/my/module.lua"
@@ -60,7 +59,7 @@ You can specify multiple hooks as an array. They will be executed in order.
 
 ```lua
 build = {
-   type = "builtin-hook",
+   type = "hooks",
 
    -- Multiple hooks executed in order
    before_build = {
@@ -83,7 +82,7 @@ You can pass arguments to hook scripts by adding them after the script path.
 
 ```lua
 build = {
-   type = "builtin-hook",
+   type = "hooks",
 
    -- Hook with arguments
    before_build = "scripts/generate.lua --verbose --output=dist",
@@ -109,7 +108,7 @@ end
 
 ## Configuration Fields
 
-- `build.type`: Must be set to `"builtin-hook"`.
+- `build.type`: Must be set to `"hooks"`.
 - `build.before_build` (optional): Path to a Lua script to execute before the build, or an array of hook strings.
 - `build.after_build` (optional): Path to a Lua script to execute after the build, or an array of hook strings.
 
@@ -150,7 +149,7 @@ Built-in hooks are predefined hooks that can be invoked using the `$(hook_name)`
 
 ```lua
 build = {
-    type = "builtin-hook",
+    type = "hooks",
     before_build = "$(hook_name)",
     -- or
     after_build = "$(hook_name)",
@@ -203,7 +202,7 @@ external_dependencies = {
 }
 
 build = {
-    type = "builtin-hook",
+    type = "hooks",
     before_build = "$(pkgconfig)",
     modules = {
         mymodule = {
@@ -247,7 +246,7 @@ The `extra-vars` hook allows you to append additional values to existing `rocksp
 
 ```lua
 build = {
-    type = "builtin-hook",
+    type = "hooks",
     before_build = "$(extra-vars)",
 
     -- Define variables that will receive extra values
@@ -299,7 +298,7 @@ variables = {
     -- NONEXISTENT is not defined: will be skipped
 }
 build = {
-    type = "builtin-hook",
+    type = "hooks",
     before_build = "$(extra-vars)",
     extra_variables = {
         CFLAGS = "-Wall",         -- Appended: CFLAGS becomes "-O2 -Wall"

@@ -84,11 +84,10 @@ local function append_extra_vars(rockspec)
     if not extra_vars then
         return
     elseif type(extra_vars) ~= "table" then
-        error(
-            "builtin-hook.extra-vars: build.extra_variables should be a table.")
+        error("hooks.extra-vars: build.extra_variables should be a table.")
     end
 
-    util.printout("builtin-hook.extra-vars: adding extra_variables...")
+    util.printout("hooks.extra-vars: adding extra_variables...")
     for name, value in pairs(extra_vars) do
         -- validate name
         if type(name) ~= "string" then

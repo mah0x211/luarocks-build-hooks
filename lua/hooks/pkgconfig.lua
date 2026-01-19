@@ -172,7 +172,7 @@ local function resolve_pkgconfig(rockspec)
         return
     end
 
-    util.printout("builtin-hook.pkgconfig: resolving external dependencies...")
+    util.printout("hooks.pkgconfig: resolving external dependencies...")
 
     for name, _ in pairs(ext_deps) do
         util.printout(("  checking %s ..."):format(name))

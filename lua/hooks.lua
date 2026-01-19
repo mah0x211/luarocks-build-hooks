@@ -142,7 +142,7 @@ local function load_builtin_hook(pathname)
     end
 
     -- Load hook as submodule via require
-    local ok, mod = pcall(require, "luarocks.build.builtin-hook." .. name)
+    local ok, mod = pcall(require, "luarocks.build.hooks." .. name)
     if not ok then
         return nil, ("Failed to load builtin-hook %s: %s"):format(name, mod)
     elseif type(mod) ~= "function" then
@@ -246,7 +246,7 @@ local function run_hook(hook, rockspec)
     end, debug.traceback)
 end
 
-local function run(rockspec, no_install)
+local function run_hooks(rockspec, no_install)
     local before_hooks, after_hooks, err
 
     -- Parse before_build hooks
@@ -285,6 +285,16 @@ local function run(rockspec, no_install)
     end
 
     return true
+end
+
+local function run(rockspec, no_install)
+    local ok, res, err = pcall(function()
+        return run_hooks(rockspec, no_install)
+    end)
+    if not ok then
+        return nil, res
+    end
+    return res, err
 end
 
 return {

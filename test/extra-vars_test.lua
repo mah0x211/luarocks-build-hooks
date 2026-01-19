@@ -1,7 +1,7 @@
 require("luacov")
 
 -- Load module under test
-local append_extra_vars = require("luarocks.build.builtin-hook.extra-vars")
+local append_extra_vars = require("luarocks.build.hooks.extra-vars")
 
 -- Test Helper
 local function run_test(name, func)
