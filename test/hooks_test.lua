@@ -54,7 +54,7 @@ local mock_util = {
 mock("luarocks.util", mock_util)
 
 -- Load module under test
-local builtin_hook = require("luarocks.build.builtin-hook")
+local builtin_hook = require("luarocks.build.hooks")
 
 -- Global Mock for loadfile and setfenv (after loading module)
 local mock_chunk_func = nil
@@ -276,7 +276,7 @@ run_test("Submodule Success", function()
     -- Mock require for our submodule
     local original_require = _G.require
     _G.require = function(modname)
-        if modname == "luarocks.build.builtin-hook.mock-sub" then
+        if modname == "luarocks.build.hooks.mock-sub" then
             return mock_submodule
         end
         return original_require(modname)
@@ -313,7 +313,7 @@ run_test("pkgconfig Success", function()
     -- Mock require for the submodule
     local original_require = _G.require
     _G.require = function(modname)
-        if modname == "luarocks.build.builtin-hook.pkgconfig" then
+        if modname == "luarocks.build.hooks.pkgconfig" then
             return mock_pkgconfig
         end
         return original_require(modname)
@@ -357,7 +357,7 @@ run_test("Builtin Hook Load Failure", function()
 
     local original_require = _G.require
     _G.require = function(modname)
-        if modname == "luarocks.build.builtin-hook.fail-load" then
+        if modname == "luarocks.build.hooks.fail-load" then
             error("module not found")
         end
         return original_require(modname)
@@ -380,9 +380,9 @@ run_test("Builtin Hook Run Failure", function()
 
     local original_require = _G.require
     _G.require = function(modname)
-        if modname == "luarocks.build.builtin-hook.fail-run" then
+        if modname == "luarocks.build.hooks.fail-run" then
             return function()
-                error("runtime error in builtin-hook")
+                error("runtime error in hooks")
             end
         end
         return original_require(modname)
@@ -617,7 +617,7 @@ run_test("Builtin Hook With Arguments", function()
 
     local original_require = _G.require
     _G.require = function(modname)
-        if modname == "luarocks.build.builtin-hook.mock-arg" then
+        if modname == "luarocks.build.hooks.mock-arg" then
             return mock_submodule
         end
         return original_require(modname)
@@ -667,7 +667,7 @@ run_test("Builtin Hook Not A Function", function()
 
     local original_require = _G.require
     _G.require = function(modname)
-        if modname == "luarocks.build.builtin-hook.not-a-function" then
+        if modname == "luarocks.build.hooks.not-a-function" then
             return {} -- Return a table instead of a function
         end
         return original_require(modname)
@@ -727,7 +727,7 @@ run_test("After Build Parse Failure", function()
 
     local original_require = _G.require
     _G.require = function(modname)
-        if modname == "luarocks.build.builtin-hook.mock-sub" then
+        if modname == "luarocks.build.hooks.mock-sub" then
             return mock_submodule
         end
         return original_require(modname)

@@ -1,7 +1,7 @@
 require("luacov")
 
 -- Load module under test
-local resolve_pkgconfig = require("luarocks.build.builtin-hook.pkgconfig")
+local resolve_pkgconfig = require("luarocks.build.hooks.pkgconfig")
 
 -- Test Helper
 local function run_test(name, func)
@@ -31,7 +31,8 @@ end
 
 local function assert_not_equal(expected, actual, msg)
     if expected == actual then
-        error((msg or "") .. " Expected " .. tostring(actual) .. " to be different from " .. tostring(expected))
+        error((msg or "") .. " Expected " .. tostring(actual) ..
+                  " to be different from " .. tostring(expected))
     end
 end
 
@@ -47,7 +48,8 @@ end
 
 -- Check if zlib is available for testing
 local function check_zlib_available()
-    local f = io.popen("pkg-config --exists zlib 2>/dev/null && echo 1 || echo 0")
+    local f = io.popen(
+                  "pkg-config --exists zlib 2>/dev/null && echo 1 || echo 0")
     if not f then
         return false
     end
@@ -75,10 +77,13 @@ if zlib_available then
         resolve_pkgconfig(rockspec)
 
         -- Check that ZLIB_ variables are set
-        assert_not_nil(rockspec.variables.ZLIB_LIBDIR, "ZLIB_LIBDIR should be set")
-        assert_not_nil(rockspec.variables.ZLIB_INCDIR, "ZLIB_INCDIR should be set")
+        assert_not_nil(rockspec.variables.ZLIB_LIBDIR,
+                       "ZLIB_LIBDIR should be set")
+        assert_not_nil(rockspec.variables.ZLIB_INCDIR,
+                       "ZLIB_INCDIR should be set")
         assert_not_nil(rockspec.variables.ZLIB_DIR, "ZLIB_DIR should be set")
-        assert_not_nil(rockspec.variables.ZLIB_MODVERSION, "ZLIB_MODVERSION should be set")
+        assert_not_nil(rockspec.variables.ZLIB_MODVERSION,
+                       "ZLIB_MODVERSION should be set")
 
         -- Check that paths are strings
         assert_equal("string", type(rockspec.variables.ZLIB_LIBDIR))
@@ -146,12 +151,13 @@ run_test("Keep variables when package not found", function()
     -- Variables should be kept since package doesn't exist (early return)
     assert_equal("/old/include", rockspec.variables.NONEXISTENT_PKG_67890_INCDIR)
     assert_equal("/old/lib", rockspec.variables.NONEXISTENT_PKG_67890_LIBDIR)
-    assert_equal("custom_value", rockspec.variables.NONEXISTENT_PKG_67890_CUSTOM_VAR)
+    assert_equal("custom_value",
+                 rockspec.variables.NONEXISTENT_PKG_67890_CUSTOM_VAR)
 end)
 
 -- Test for partial match with suggestions
 run_test("Package not found with suggestions", function()
-    local rockspec = create_rockspec("zli")  -- Partial match for "zlib"
+    local rockspec = create_rockspec("zli") -- Partial match for "zlib"
 
     resolve_pkgconfig(rockspec)
 
@@ -162,13 +168,15 @@ end)
 
 if zlib_available then
     run_test("Case insensitive package name resolution", function()
-        local rockspec = create_rockspec("ZLIB")  -- Use uppercase
+        local rockspec = create_rockspec("ZLIB") -- Use uppercase
 
         resolve_pkgconfig(rockspec)
 
         -- Variables should still be set with ZLIB_ prefix (original name)
-        assert_not_nil(rockspec.variables.ZLIB_INCDIR, "ZLIB_INCDIR should be set")
-        assert_not_nil(rockspec.variables.ZLIB_LIBDIR, "ZLIB_LIBDIR should be set")
+        assert_not_nil(rockspec.variables.ZLIB_INCDIR,
+                       "ZLIB_INCDIR should be set")
+        assert_not_nil(rockspec.variables.ZLIB_LIBDIR,
+                       "ZLIB_LIBDIR should be set")
     end)
 
     run_test("Remove obsolete variables when package found", function()
@@ -199,8 +207,10 @@ if zlib_available then
                      "ZLIB_CUSTOM_VAR should be removed")
 
         -- Standard variables should still exist
-        assert_not_nil(rockspec2.variables.ZLIB_INCDIR, "ZLIB_INCDIR should be set")
-        assert_not_nil(rockspec2.variables.ZLIB_LIBDIR, "ZLIB_LIBDIR should be set")
+        assert_not_nil(rockspec2.variables.ZLIB_INCDIR,
+                       "ZLIB_INCDIR should be set")
+        assert_not_nil(rockspec2.variables.ZLIB_LIBDIR,
+                       "ZLIB_LIBDIR should be set")
     end)
 end
 
@@ -263,7 +273,8 @@ if zlib_available then
         _G.io.popen = old_popen
 
         -- Variables should remain unchanged since find_package failed
-        assert_equal("/existing/include", rockspec.variables.ZLIB_NONEXIST_INCDIR)
+        assert_equal("/existing/include",
+                     rockspec.variables.ZLIB_NONEXIST_INCDIR)
     end)
 end
 
