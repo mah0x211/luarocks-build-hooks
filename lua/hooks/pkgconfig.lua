@@ -93,18 +93,23 @@ end
 local function update_variables(variables, new_vars, old_vars)
     -- Log added and updated variables
     for k, v in pairs(new_vars) do
+        -- Note: Replace hyphens with underscores in variable names.
+        -- luarocks cannot process variable names containing hyphens, but
+        -- pkg-config packages may contain hyphens. This normalization ensures
+        -- compatibility.
+        local newk = k:gsub("-", "_")
         local old_val = old_vars[k]
         local msg = ""
         if not old_val then
-            msg = ("    added %s = %s"):format(k, v)
+            msg = ("    added %s = %s"):format(newk, v)
         elseif old_val ~= v then
-            msg = ("    updated %s = %s (replaced %s)"):format(k, v, old_val)
+            msg = ("    updated %s = %s (replaced %s)"):format(newk, v, old_val)
         else
-            msg = ("    kept %s = %s"):format(k, v)
+            msg = ("    kept %s = %s"):format(newk, v)
         end
         util.printout(msg)
         old_vars[k] = nil
-        variables[k] = v
+        variables[newk] = v
     end
 
     -- Log old variables that were removed
