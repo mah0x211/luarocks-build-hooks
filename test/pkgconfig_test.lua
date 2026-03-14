@@ -242,11 +242,11 @@ if zlib_available then
         -- Restore original io.popen
         _G.io.popen = old_popen
 
-        -- Variables should be removed by extract_variables but not restored
-        -- since get_pkg_variables failed
-        assert_equal(nil, rockspec.variables.ZLIB_INCDIR)
-        assert_equal(nil, rockspec.variables.ZLIB_LIBDIR)
-        assert_equal(nil, rockspec.variables.ZLIB_CUSTOM_VAR)
+        -- Variables should be preserved since get_pkg_variables is now called
+        -- before extract_variables, so old vars are untouched on failure
+        assert_equal("/existing/include", rockspec.variables.ZLIB_INCDIR)
+        assert_equal("/existing/lib", rockspec.variables.ZLIB_LIBDIR)
+        assert_equal("custom_value", rockspec.variables.ZLIB_CUSTOM_VAR)
     end)
 
     run_test("Handle io.popen failure in find_package", function()
@@ -275,6 +275,32 @@ if zlib_available then
         -- Variables should remain unchanged since find_package failed
         assert_equal("/existing/include",
                      rockspec.variables.ZLIB_NONEXIST_INCDIR)
+    end)
+end
+
+if zlib_available then
+    run_test("Continue processing remaining deps when one is not in pkg-config",
+             function()
+        -- Two external_dependencies: zlib (valid) + nonexistent (not in pkg-config)
+        local rockspec = {
+            external_dependencies = {
+                zlib = {},
+                ["nonexistent-pkg-99999"] = {},
+            },
+            variables = {},
+        }
+
+        resolve_pkgconfig(rockspec)
+
+        -- zlib variables should be set
+        assert_not_nil(rockspec.variables.ZLIB_INCDIR,
+                       "ZLIB_INCDIR should be set")
+        assert_not_nil(rockspec.variables.ZLIB_LIBDIR,
+                       "ZLIB_LIBDIR should be set")
+
+        -- nonexistent package variables should be absent
+        assert_equal(nil, rockspec.variables.NONEXISTENT_PKG_99999_INCDIR)
+        assert_equal(nil, rockspec.variables.NONEXISTENT_PKG_99999_LIBDIR)
     end)
 end
 
