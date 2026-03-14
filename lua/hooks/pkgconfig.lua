@@ -169,8 +169,51 @@ local VAR_MAP = {
     bindir = "BINDIR",
 }
 
+--- Resolve a single external dependency using pkg-config
+--- @param rockspec table The rockspec table
+--- @param name string The dependency name from external_dependencies
+local function resolve_one(rockspec, name)
+    -- First, try to find exact case-insensitive match for better UX
+    local pkgname, suggestions = find_package(name)
+    if not pkgname then
+        util.printout(("    %s is not registered in pkg-config."):format(name))
+        if suggestions and #suggestions > 0 then
+            util.printout(("    Did you mean: %s?"):format(concat(suggestions,
+                                                                  ', ')))
+        end
+        return
+    end
+
+    -- Log resolved package name if different
+    if pkgname ~= name then
+        util.printout(("    resolved to %s"):format(pkgname))
+    end
+    name = pkgname
+
+    -- Fetch all pkg-config data before modifying rockspec.variables so that
+    -- existing variables are preserved if the fetch fails
+    local pkg_data, err = get_pkg_variables(name)
+    if not pkg_data then
+        util.printout(("    failed to get pkg-config data: %s"):format(err or
+                                                                           "unknown error"))
+        return
+    end
+
+    -- Back up and remove all existing variables with the prefix <NAME>_
+    local prefix = name:upper() .. "_"
+    local old_vars = extract_variables(rockspec.variables, prefix)
+    -- Normalize variable names
+    local new_vars = {}
+    for varname, val in pairs(pkg_data) do
+        local suffix = VAR_MAP[varname] or varname:upper()
+        new_vars[prefix .. suffix] = val
+    end
+    -- Update variables and log changes
+    update_variables(rockspec.variables, new_vars, old_vars)
+end
+
 --- Resolve dependencies using pkg-config
--- @param rockspec The rockspec table
+--- @param rockspec table The rockspec table
 local function resolve_pkgconfig(rockspec)
     local ext_deps = rockspec.external_dependencies
     if not ext_deps then
@@ -178,47 +221,9 @@ local function resolve_pkgconfig(rockspec)
     end
 
     util.printout("hooks.pkgconfig: resolving external dependencies...")
-
     for name, _ in pairs(ext_deps) do
         util.printout(("  checking %s ..."):format(name))
-
-        -- First, try to find exact case-insensitive match for better UX
-        local pkgname, suggestions = find_package(name)
-        if not pkgname then
-            util.printout(("    %s is not registered in pkg-config."):format(
-                              name))
-            if suggestions and #suggestions > 0 then
-                util.printout(("    Did you mean: %s?"):format(concat(
-                                                                   suggestions,
-                                                                   ', ')))
-            end
-            return
-        end
-
-        -- Log resolved package name if different
-        if pkgname ~= name then
-            util.printout(("    resolved to %s"):format(pkgname))
-        end
-        name = pkgname
-
-        -- Identify and back up all existing variables with the prefix <NAME>_
-        local prefix = name:upper() .. "_"
-        local old_vars = extract_variables(rockspec.variables, prefix)
-        -- Fetch all pkg-config data
-        local pkg_data, err = get_pkg_variables(name)
-        if not pkg_data then
-            util.printout(("    failed to get pkg-config data: %s"):format(
-                              err or "unknown error"))
-            return
-        end
-        -- Normalize variable names
-        local new_vars = {}
-        for varname, val in pairs(pkg_data) do
-            local suffix = VAR_MAP[varname] or varname:upper()
-            new_vars[prefix .. suffix] = val
-        end
-        -- Update variables and log changes
-        update_variables(rockspec.variables, new_vars, old_vars)
+        resolve_one(rockspec, name)
     end
 end
 
