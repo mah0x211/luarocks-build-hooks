@@ -22,9 +22,93 @@
 local concat = table.concat
 local util = require("luarocks.util")
 
+--- Process a libraries array, expanding any standalone $(VAR_NAME) entries into
+--- individual library names. Raises an error if the reference is embedded within
+--- a larger string. Returns the original table if no expansion was needed.
+--- @param libs string[] The libraries array to process
+--- @param lib_names string[] Library names to expand into
+--- @param var_name string The normalized *_LIB variable name (e.g. "OPENSSL_LIB")
+--- @return string[] The processed libraries array (new table if expanded)
+local function expand_libraries(libs, lib_names, var_name)
+    local var_pat = '%$%(' .. var_name .. '%)'
+    local var_ref = ('$(%s)'):format(var_name)
+    local new_libs = {}
+    local changed = false
+    for _, entry in ipairs(libs) do
+        if entry:find(var_pat) then
+            local remainder = entry:gsub(var_pat, "")
+            if remainder:match('%S') then
+                error(("%s resolves to multiple libraries and cannot " ..
+                          "be embedded in a library entry: %q"):format(var_ref,
+                                                                       entry))
+            end
+            changed = true
+        else
+            new_libs[#new_libs + 1] = entry
+        end
+    end
+
+    -- No entries contained the variable reference, so no expansion needed.
+    if not changed then
+        return libs
+    end
+
+    -- Expand the variable reference into individual library names.
+    for _, lib in ipairs(lib_names) do
+        new_libs[#new_libs + 1] = lib
+    end
+    return new_libs
+end
+
+--- Expand multi-lib $(VAR_LIB) entries in the libraries field of target modules.
+--- Only expands when lib_names contains more than one library name.
+--- Single-lib entries are left as-is for LuaRocks to substitute natively.
+--- Raises an error if the variable reference is embedded within a larger string,
+--- since a multi-lib variable cannot be meaningfully embedded.
+--- @param targets table  Map of module name to module table (from get_target_modules)
+--- @param var_name string The normalized *_LIB variable name (e.g. "OPENSSL_LIB")
+--- @param lib_names string[] Library names extracted from Libs (empty = no-op)
+local function expand_lib_vars(targets, var_name, lib_names)
+    if #lib_names < 2 then
+        return
+    end
+
+    for _, mod in pairs(targets) do
+        local libs = mod.libraries
+        if type(libs) == 'table' then
+            local result = expand_libraries(libs, lib_names, var_name)
+            if result ~= libs then
+                mod.libraries = result
+            end
+        end
+    end
+end
+
+local function update_variables(variables, new_vars, old_vars)
+    -- Log added and updated variables
+    for k, v in pairs(new_vars) do
+        local old_val = old_vars[k]
+        local msg = ("    kept %s = %s"):format(k, v)
+        if not old_val then
+            msg = ("    added %s = %s"):format(k, v)
+        elseif old_val ~= v then
+            msg = ("    updated %s = %s (replaced %s)"):format(k, v, old_val)
+        end
+        util.printout(msg)
+        old_vars[k] = nil
+        variables[k] = v
+    end
+
+    -- Log old variables that were removed
+    for k, v in pairs(old_vars) do
+        util.printout(("    removed %s = %s"):format(k, v))
+    end
+end
+
 --- Get all pkg-config variables and metadata for a given package
 --- @param pkg string name
 --- @return table? vars all variables and metadata fields
+--- @return string? err error message if failed to get variables
 local function get_pkg_variables(pkg)
     local f, err = io.popen(([[
 pkg="%s"
@@ -79,49 +163,6 @@ fi
     return res
 end
 
---- Normalize a string to a valid LuaRocks variable name.
---- LuaRocks variable substitution $(NAME) only recognizes names starting with
---- a letter and containing only letters, digits, and underscores. This function
---- replaces any other character with an underscore.
---- @param s string
---- @return string
-local function normalize_varname(s)
-    return s:gsub("[^%a%d_]", "_")
-end
-
-local function extract_variables(variables, prefix)
-    local extracted = {}
-    for k, v in pairs(variables) do
-        if k:find(prefix, 1, true) == 1 then
-            extracted[k] = v
-            variables[k] = nil
-        end
-    end
-    return extracted
-end
-
-local function update_variables(variables, new_vars, old_vars)
-    -- Log added and updated variables
-    for k, v in pairs(new_vars) do
-        local newk = normalize_varname(k)
-        local old_val = old_vars[k]
-        local msg = ("    kept %s = %s"):format(newk, v)
-        if not old_val then
-            msg = ("    added %s = %s"):format(newk, v)
-        elseif old_val ~= v then
-            msg = ("    updated %s = %s (replaced %s)"):format(newk, v, old_val)
-        end
-        util.printout(msg)
-        old_vars[k] = nil
-        variables[newk] = v
-    end
-
-    -- Log old variables that were removed
-    for k, v in pairs(old_vars) do
-        util.printout(("    removed %s = %s"):format(k, v))
-    end
-end
-
 --- Find package with case-insensitive exact match and get suggestions
 --- @param pkg string name to search for
 --- @return string? package name if found (case-insensitive), nil otherwise
@@ -173,124 +214,34 @@ local VAR_MAP = {
     bindir = "BINDIR",
 }
 
---- Process a libraries array, expanding any standalone $(VAR_NAME) entries into
---- individual library names. Raises an error if the reference is embedded within
---- a larger string. Returns the original table if no expansion was needed.
---- @param libs string[] The libraries array to process
---- @param lib_names string[] Library names to expand into
---- @param var_name string The normalized *_LIB variable name (e.g. "OPENSSL_LIB")
---- @return string[] The processed libraries array (new table if expanded)
-local function expand_libraries(libs, lib_names, var_name)
-    local var_pat = '%$%(' .. var_name .. '%)'
-    local var_ref = ('$(%s)'):format(var_name)
-    local new_libs = {}
-    local changed = false
-    for _, entry in ipairs(libs) do
-        if entry:find(var_pat) then
-            local remainder = entry:gsub(var_pat, "")
-            if remainder:match('%S') then
-                error(("%s resolves to multiple libraries and cannot " ..
-                          "be embedded in a library entry: %q"):format(var_ref,
-                                                                       entry))
-            end
-            changed = true
-        else
-            new_libs[#new_libs + 1] = entry
-        end
-    end
-
-    -- No entries contained the variable reference, so no expansion needed.
-    if not changed then
-        return libs
-    end
-
-    -- Expand the variable reference into individual library names.
-    for _, lib in ipairs(lib_names) do
-        new_libs[#new_libs + 1] = lib
-    end
-    return new_libs
-end
-
---- Expand multi-lib $(VAR_LIB) entries in rockspec.build.modules.*.libraries.
---- Only expands when lib_names contains more than one library name.
---- Single-lib entries are left as-is for LuaRocks to substitute natively.
---- Raises an error if the variable reference is embedded within a larger string,
---- since a multi-lib variable cannot be meaningfully embedded.
---- @param rockspec table The rockspec table
---- @param var_name string The normalized *_LIB variable name (e.g. "OPENSSL_LIB")
---- @param lib_names string[] Library names extracted from Libs (empty = no-op)
-local function expand_lib_vars(rockspec, var_name, lib_names)
-    if #lib_names < 2 then
-        return
-    end
-
-    local modules = rockspec.build and rockspec.build.modules
-    if type(modules) ~= 'table' then
-        return
-    end
-
-    for _, mod in pairs(modules) do
-        if type(mod) == 'table' then
-            local libs = mod.libraries
-            if type(libs) == 'string' then
-                -- Single string entry - convert to table for uniform processing.
-                libs = {
-                    libs,
-                }
-            end
-
-            if type(libs) == 'table' then
-                local result = expand_libraries(libs, lib_names, var_name)
-                if result ~= libs then
-                    mod.libraries = result
-                end
-            end
-        end
-    end
-end
-
 --- Resolve a single external dependency using pkg-config
 --- @param rockspec table The rockspec table
---- @param name string The dependency name from external_dependencies
-local function resolve_one(rockspec, name)
-    -- First, try to find exact case-insensitive match for better UX
-    local pkgname, suggestions = find_package(name)
+--- @param pkginfo pkginfo The pkginfo table from make_pkginfo
+local function resolve_one(rockspec, pkginfo)
+    local pkgname, suggestions = find_package(pkginfo.name)
     if not pkgname then
-        util.printout(("    %s is not registered in pkg-config."):format(name))
+        util.printout(("    %s is not registered in pkg-config."):format(
+                          pkginfo.name))
         if suggestions and #suggestions > 0 then
             util.printout(("    Did you mean: %s?"):format(concat(suggestions,
                                                                   ', ')))
         end
         return
-    end
-
-    -- Log resolved package name if different
-    if pkgname ~= name then
+    elseif pkgname ~= pkginfo.name then
         util.printout(("    resolved to %s"):format(pkgname))
     end
-    name = pkgname
 
-    -- Fetch all pkg-config data before modifying rockspec.variables so that
-    -- existing variables are preserved if the fetch fails
-    local pkg_data, err = get_pkg_variables(name)
+    local pkg_data, err = get_pkg_variables(pkgname)
     if not pkg_data then
         util.printout(("    failed to get pkg-config data: %s"):format(err or
                                                                            "unknown error"))
         return
     end
 
-    -- Back up and remove all existing variables with the prefix <NAME>_.
-    -- Normalize the prefix so it matches the stored variable keys:
-    -- Normalize the prefix so it matches the stored variable keys.
-    -- LuaRocks only allows [%a%d_] in $(NAME), so any other character (hyphens,
-    -- dots, etc.) in the package name is replaced with underscores.
-    local prefix = normalize_varname(name:upper() .. "_")
-    local old_vars = extract_variables(rockspec.variables, prefix)
-    -- Normalize variable names
     local new_vars = {}
     for varname, val in pairs(pkg_data) do
         local suffix = VAR_MAP[varname] or varname:upper()
-        new_vars[prefix .. suffix] = val
+        new_vars[pkginfo.prefix .. suffix] = val
     end
 
     -- Synthesize *_LIB: all library names from Libs, space-separated (no -l prefix).
@@ -301,15 +252,182 @@ local function resolve_one(rockspec, name)
             lib_names[#lib_names + 1] = lib
         end
         if #lib_names > 0 then
-            new_vars[prefix .. "LIB"] = concat(lib_names, ' ')
+            new_vars[pkginfo.prefix .. "LIB"] = concat(lib_names, ' ')
         end
     end
-    -- Update variables and log changes
-    update_variables(rockspec.variables, new_vars, old_vars)
 
-    -- prefix is already normalized; just append "LIB".
-    local lib_key = prefix .. "LIB"
-    expand_lib_vars(rockspec, lib_key, lib_names)
+    update_variables(rockspec.variables, new_vars, pkginfo.vars)
+    expand_lib_vars(pkginfo.targets, pkginfo.prefix .. "LIB", lib_names)
+end
+
+--- Replace all plain (non-pattern) occurrences of `old` with `new_str` in `s`.
+--- Returns the resulting string and a boolean indicating whether any replacement
+--- was made.
+--- @param s string
+--- @param old_str string
+--- @param new_str string
+--- @return string result, boolean changed
+local function str_replace_all(s, old_str, new_str)
+    local parts = {}
+    local pos = 1
+    local i, j = s:find(old_str, pos, true)
+    while i do
+        parts[#parts + 1] = s:sub(pos, i - 1)
+        parts[#parts + 1] = new_str
+        pos = j + 1
+        i, j = s:find(old_str, pos, true)
+    end
+    if pos <= #s then
+        parts[#parts + 1] = s:sub(pos)
+    end
+    return table.concat(parts), #parts > 1
+end
+
+--- Check a single module field for raw dep variable references, normalizing
+--- them in-place if found. If the field value is a plain string it is wrapped
+--- in a single-element array so the rest of the pipeline can treat all fields
+--- as arrays uniformly.
+--- Returns the (possibly converted) array when at least one dep var reference
+--- was found, or nil when no reference is present.
+--- @param pkginfo pkginfo The pkginfo table from make_pkginfo
+--- @param modname string The module name (used in error messages)
+--- @param field string The field name (used in error messages, e.g. "libraries")
+--- @param vals string|string[]|nil The raw field value
+--- @return string[]? vals The normalized array, or nil if no dep var ref found
+local function check_target_field(pkginfo, modname, field, vals)
+    if vals == nil then
+        return
+    elseif type(vals) == "string" then
+        vals = {
+            vals,
+        }
+    elseif type(vals) ~= "table" then
+        error(("%s.%s: expected string or table, got %s"):format(modname, field,
+                                                                 type(vals)))
+    end
+
+    local result
+    for i, entry in ipairs(vals) do
+        for _, suffix in ipairs({
+            "LIB",
+            "INCDIR",
+            "LIBDIR",
+        }) do
+            local raw_ref = "$(" .. pkginfo.raw_prefix .. suffix .. ")"
+            local norm_ref = "$(" .. pkginfo.prefix .. suffix .. ")"
+            if raw_ref ~= norm_ref then
+                local new_entry, changed =
+                    str_replace_all(entry, raw_ref, norm_ref)
+                if changed then
+                    vals[i] = new_entry
+                    entry = new_entry
+                    result = vals
+                end
+            elseif entry:find(raw_ref, 1, true) then
+                result = vals
+            end
+        end
+    end
+    return result
+end
+
+--- Find all build modules that reference variables for the named external
+--- dependency using the raw (non-normalized) prefix form only, and normalize
+--- those references in-place to the LuaRocks-compatible form.
+--- Any field among libraries/incdirs/libdirs that is a plain string is converted
+--- to a single-element array so that the rest of the pipeline can always treat
+--- those fields as tables.
+--- @param rockspec table The rockspec table
+--- @param pkginfo pkginfo The pkginfo table from make_pkginfo
+--- @return pkginfo pkginfo The updated pkginfo with targets referencing this dependency
+local function get_target_modules(rockspec, pkginfo)
+    local targets = pkginfo.targets
+    local modules = rockspec.build and rockspec.build.modules
+    if type(modules) ~= "table" then
+        return pkginfo
+    end
+
+    for modname, mod in pairs(modules) do
+        if type(mod) == "table" then
+            for _, field in ipairs({
+                "libraries",
+                "incdirs",
+                "libdirs",
+            }) do
+                local vals = check_target_field(pkginfo, modname, field,
+                                                mod[field])
+                if vals then
+                    mod[field] = vals
+                    targets[modname] = mod
+                end
+            end
+        end
+    end
+
+    return pkginfo
+end
+
+--- Extract variables with keys starting with prefix from variables table
+--- Removes the extracted variables from the original table and returns them in
+--- a new table.
+--- @param variables table The original variables table to extract from and modify
+--- @param prefix string The prefix to match keys against (e.g. "LIBFOO2-8_")
+--- @return table extracted The extracted variables with keys starting with prefix and their values
+local function extract_variables(variables, prefix)
+    local extracted = {}
+    for k, v in pairs(variables) do
+        if k:find(prefix, 1, true) == 1 then
+            extracted[k] = v
+            variables[k] = nil
+        end
+    end
+    return extracted
+end
+
+--- Normalize a string to a valid LuaRocks variable name.
+--- LuaRocks variable substitution $(NAME) only recognizes names starting with
+--- a letter and containing only letters, digits, and underscores. This function
+--- replaces any other character with an underscore.
+--- @param s string
+--- @return string
+local function normalize_varname(s)
+    local res = s:gsub("[^%a%d_]", "_")
+    return res
+end
+
+--- @class pkginfo
+--- @field name string original dep name (e.g. "LIBFOO2-8")
+--- @field raw_prefix string raw uppercase prefix (e.g. "LIBFOO2-8_")
+--- @field prefix string normalized prefix (e.g. "LIBFOO2_8_")
+--- @field vars table variables extracted from rockspec.variables whose key
+---                   starts with raw_prefix.
+--- @field targets table modules referencing this dep's raw-form vars
+
+--- Build a structured info object for a single external dependency.
+--- @param rockspec table The rockspec table
+--- @param name string The dependency name from external_dependencies
+--- @return pkginfo pkginfo
+local function make_pkginfo(rockspec, name)
+    local raw_prefix = name:upper() .. "_"
+    local prefix = normalize_varname(raw_prefix)
+
+    local raw_vars = extract_variables(rockspec.variables, raw_prefix)
+    local vars = {}
+    for k, v in pairs(raw_vars) do
+        local nk = normalize_varname(k)
+        if k ~= nk then
+            util.printout(("    normalizing %s -> %s"):format(k, nk))
+        end
+        vars[nk] = v
+    end
+
+    return get_target_modules(rockspec, {
+        name = name,
+        raw_prefix = raw_prefix,
+        prefix = prefix,
+        vars = vars,
+        targets = {},
+    })
 end
 
 --- Resolve dependencies using pkg-config
@@ -323,7 +441,8 @@ local function resolve_pkgconfig(rockspec)
     util.printout("hooks.pkgconfig: resolving external dependencies...")
     for name, _ in pairs(ext_deps) do
         util.printout(("  checking %s ..."):format(name))
-        resolve_one(rockspec, name)
+        local pkginfo = make_pkginfo(rockspec, name)
+        resolve_one(rockspec, pkginfo)
     end
 end
 

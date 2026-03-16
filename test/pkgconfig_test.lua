@@ -242,11 +242,13 @@ if zlib_available then
         -- Restore original io.popen
         _G.io.popen = old_popen
 
-        -- Variables should be preserved since get_pkg_variables is now called
-        -- before extract_variables, so old vars are untouched on failure
-        assert_equal("/existing/include", rockspec.variables.ZLIB_INCDIR)
-        assert_equal("/existing/lib", rockspec.variables.ZLIB_LIBDIR)
-        assert_equal("custom_value", rockspec.variables.ZLIB_CUSTOM_VAR)
+        -- make_pkginfo extracts ZLIB_* vars from rockspec.variables upfront (raw
+        -- prefix "ZLIB_" == normalized prefix for a non-hyphenated name).
+        -- When get_pkg_variables then fails, the extracted vars are not restored
+        -- and the build would fail for missing variables anyway.
+        assert_equal(nil, rockspec.variables.ZLIB_INCDIR)
+        assert_equal(nil, rockspec.variables.ZLIB_LIBDIR)
+        assert_equal(nil, rockspec.variables.ZLIB_CUSTOM_VAR)
     end)
 
     run_test("Handle io.popen failure in find_package", function()
@@ -574,5 +576,161 @@ run_test(
                    "variable key contains invalid character: " .. k)
         end
     end)
+
+run_test("Raw dep name with hyphens: $(VAR) refs in modules are normalized",
+         function()
+    local rockspec = {
+        external_dependencies = {
+            ["MYLIB-2"] = {},
+        },
+        variables = {},
+        build = {
+            modules = {
+                mymod = {
+                    libraries = {
+                        "$(MYLIB-2_LIB)",
+                    },
+                    incdirs = {
+                        "$(MYLIB-2_INCDIR)",
+                    },
+                    libdirs = {
+                        "$(MYLIB-2_LIBDIR)",
+                    },
+                },
+            },
+        },
+    }
+
+    local call_count = 0
+    local old_popen = _G.io.popen
+    _G.io.popen = function(cmd)
+        call_count = call_count + 1
+        if call_count == 1 then
+            return make_fake_file("MYLIB-2\n")
+        end
+        return make_fake_file("prefix=/opt/mylib\n" ..
+                                  "includedir=/opt/mylib/include\n" ..
+                                  "libdir=/opt/mylib/lib\n" .. "Name=MYLIB-2\n" ..
+                                  "Version=2.0\n" ..
+                                  "Libs=-L/opt/mylib/lib -lmylib2\n" ..
+                                  "Cflags=-I/opt/mylib/include\n" ..
+                                  "Modversion=2.0\n")
+    end
+
+    resolve_pkgconfig(rockspec)
+    _G.io.popen = old_popen
+
+    -- Variables should be set with normalized prefix
+    assert_not_nil(rockspec.variables["MYLIB_2_INCDIR"],
+                   "MYLIB_2_INCDIR should be set")
+    assert_not_nil(rockspec.variables["MYLIB_2_LIBDIR"],
+                   "MYLIB_2_LIBDIR should be set")
+    assert_not_nil(rockspec.variables["MYLIB_2_DIR"],
+                   "MYLIB_2_DIR should be set")
+    assert_not_nil(rockspec.variables["MYLIB_2_LIB"],
+                   "MYLIB_2_LIB should be set")
+
+    -- Raw-form $(MYLIB-2_*) references in modules should be replaced with
+    -- normalized $(MYLIB_2_*) so LuaRocks $(VAR) substitution works
+    assert_equal("$(MYLIB_2_LIB)", rockspec.build.modules.mymod.libraries[1],
+                 "libraries ref should be normalized")
+    assert_equal("$(MYLIB_2_INCDIR)", rockspec.build.modules.mymod.incdirs[1],
+                 "incdirs ref should be normalized")
+    assert_equal("$(MYLIB_2_LIBDIR)", rockspec.build.modules.mymod.libdirs[1],
+                 "libdirs ref should be normalized")
+end)
+
+run_test(
+    "String libraries/incdirs/libdirs are converted to arrays when dep vars are found",
+    function()
+        local rockspec = {
+            external_dependencies = {
+                STRTEST = {},
+            },
+            variables = {},
+            build = {
+                modules = {
+                    mymod = {
+                        libraries = "$(STRTEST_LIB)",
+                        incdirs = "$(STRTEST_INCDIR)",
+                        libdirs = "$(STRTEST_LIBDIR)",
+                    },
+                },
+            },
+        }
+
+        local call_count = 0
+        local old_popen = _G.io.popen
+        _G.io.popen = function(cmd)
+            call_count = call_count + 1
+            if call_count == 1 then
+                return make_fake_file("STRTEST\n")
+            end
+            return make_fake_file("prefix=/opt/strtest\n" ..
+                                      "includedir=/opt/strtest/include\n" ..
+                                      "libdir=/opt/strtest/lib\n" ..
+                                      "Libs=-L/opt/strtest/lib -lstrtest\n" ..
+                                      "Cflags=-I/opt/strtest/include\n" ..
+                                      "Modversion=1.0\n")
+        end
+
+        resolve_pkgconfig(rockspec)
+        _G.io.popen = old_popen
+
+        -- String fields referencing this dep's vars should be converted to arrays
+        assert_equal("table", type(rockspec.build.modules.mymod.libraries),
+                     "libraries should be a table")
+        assert_equal("table", type(rockspec.build.modules.mymod.incdirs),
+                     "incdirs should be a table")
+        assert_equal("table", type(rockspec.build.modules.mymod.libdirs),
+                     "libdirs should be a table")
+        -- Single-lib: entry stays as $(STRTEST_LIB) for LuaRocks substitution
+        assert_equal("$(STRTEST_LIB)", rockspec.build.modules.mymod.libraries[1])
+        assert_equal("$(STRTEST_INCDIR)",
+                     rockspec.build.modules.mymod.incdirs[1])
+        assert_equal("$(STRTEST_LIBDIR)",
+                     rockspec.build.modules.mymod.libdirs[1])
+    end)
+
+run_test("Modules without dep var refs are not modified by get_target_modules",
+         function()
+    local rockspec = {
+        external_dependencies = {
+            MYFOO = {},
+        },
+        variables = {},
+        build = {
+            modules = {
+                -- This module has no MYFOO references; its string field must
+                -- remain a string (not converted to array).
+                unrelated = {
+                    libraries = "other_lib",
+                },
+            },
+        },
+    }
+
+    local call_count = 0
+    local old_popen = _G.io.popen
+    _G.io.popen = function(cmd)
+        call_count = call_count + 1
+        if call_count == 1 then
+            return make_fake_file("MYFOO\n")
+        end
+        return make_fake_file("prefix=/opt/myfoo\n" ..
+                                  "includedir=/opt/myfoo/include\n" ..
+                                  "libdir=/opt/myfoo/lib\n" ..
+                                  "Libs=-L/opt/myfoo/lib -lmyfoo\n" ..
+                                  "Modversion=1.0\n")
+    end
+
+    resolve_pkgconfig(rockspec)
+    _G.io.popen = old_popen
+
+    -- Unrelated module's string field should remain unchanged
+    assert_equal("string", type(rockspec.build.modules.unrelated.libraries),
+                 "unrelated module libraries should remain a string")
+    assert_equal("other_lib", rockspec.build.modules.unrelated.libraries)
+end)
 
 print("All pkgconfig tests passed!")
