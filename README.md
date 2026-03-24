@@ -293,6 +293,10 @@ build_dependencies = {
     "luarocks-build-hooks",
 }
 
+-- Keep this as an explicit empty table to suppress LuaRocks'
+-- external dependency autodetection from build.modules.
+external_dependencies = {}
+
 build = {
     type = "hooks",
     before_build = "$(pkgconfig)",
@@ -322,6 +326,7 @@ build = {
 
 - The dependency name in `pkgconfig_dependencies` should match the `pkg-config` package name (case-insensitive).
 - Variable names are automatically uppercased and any non-identifier character is replaced with an underscore (e.g., `libfoo-2.0` → `LIBFOO_2_0_*`), as required by LuaRocks `$(NAME)` substitution.
+- When `build.modules` references hook-generated variables such as `$(LIBFOO_2_0_LIB)`, keep `external_dependencies = {}` in the rockspec to suppress LuaRocks' pre-hook autodetection.
 - If a package is not found by `pkg-config`, the hook logs a message and falls back to compiler default path search.
 - If a package is not found, the hook suggests similar package names based on `pkg-config --list-all`.
 - If `header` or `library` is declared but cannot be found in any path, the hook raises an error with a hint on which variable to set.
