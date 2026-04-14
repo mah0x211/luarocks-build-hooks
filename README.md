@@ -478,6 +478,181 @@ ENABLE_FEATURE= luarocks make
 ```
 
 
+## `$(configh)` Built-in Hook
+
+The `configh` hook generates a C header file by calling [`configh.generate()`](https://github.com/mah0x211/lua-configh) for each `build.modules[modname]` entry that:
+
+- is a table, and
+- has a `configh` field.
+
+For each matching module, the hook:
+
+1. requires `module.configh` to be a table,
+2. deep-copies `module.configh` while ignoring any existing `report` field,
+3. resolves `$(VAR)` placeholders from `rockspec.variables` in all nested string values,
+4. normalises `cfg.libs` when it is a table,
+5. calls `configh.generate(cfg, 'build.modules["..."].configh')`, and
+6. stores the returned report in `build.modules[modname].configh.report`.
+
+Plain string module entries such as:
+
+```lua
+modules = {
+    mymod = "src/mymod.c",
+}
+```
+
+are ignored by this hook, as they have no place to attach `configh = { ... }`.
+
+### `$(VAR)` Resolution
+
+All string values inside `module.configh` (including nested tables) may contain `$(VAR)` placeholders. Before calling `configh.generate()`, the hook replaces them with the corresponding string values from `rockspec.variables`.
+
+Unknown variable names are left unchanged. Non-string values in `rockspec.variables` are also ignored.
+
+The original `module.configh` table is not rewritten during substitution; the hook works on a deep copy and only writes back `module.configh.report` after a successful run.
+
+### `libs` Normalisation
+
+`configh.generate()` accepts `libs` as either a string or a string array, but it passes each entry directly as one `-l` flag. To make values coming from hooks such as `$(pkgconfig)` usable, this hook normalises `libs` **when `libs` is a table** by splitting each whitespace-separated entry into individual library names and dropping empty segments.
+
+These forms are therefore equivalent:
+
+```lua
+libs = { "ssl crypto" }   -- split → { "ssl", "crypto" }
+libs = { "ssl", "crypto" } -- already individual
+```
+
+However, a scalar string is passed through unchanged:
+
+```lua
+libs = "ssl crypto" -- passed to configh as one library name
+```
+
+So when a value may expand to multiple libraries, prefer table form:
+
+```lua
+libs = { "$(OPENSSL_LIB)" }
+```
+
+### `report` Output
+
+After a successful run, the hook stores the generated probe report at:
+
+```lua
+rockspec.build.modules[modname].configh.report
+```
+
+The structure is keyed by header name:
+
+```lua
+{
+    ["sys/event.h"] = {
+        is_exists = true,
+        kevent = true,
+        ["struct kevent.ident"] = true,
+    },
+}
+```
+
+Report value semantics are:
+
+- `is_exists`: `true` or `false`
+- `funcs`, `types`, `decls`, `members`: `true` or `false`
+- `sizeof`: integer byte size on success, otherwise `false`
+
+If a header probe fails, child entries under that header are not populated.
+
+`report` is an output-only field. If `module.configh.report` already exists from a previous run, it is ignored when building the input passed to `configh.generate()` and then overwritten with the new report.
+
+### Accepted `module.configh` Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `output` | `string` | **Required.** Path to the header file to generate |
+| `cc` | `string` | C compiler path |
+| `output_status` | `boolean` | Print probe status to stdout |
+| `incdirs` | `string` or `string[]` | Extra include directories (`-I`) |
+| `libdirs` | `string` or `string[]` | Extra library directories (`-L`) |
+| `libs` | `string` or `string[]` | Libraries to link during probes (`-l`) |
+| `cppflags` | `string` or `string[]` | Extra preprocessor flags |
+| `cflags` | `string` or `string[]` | Extra compiler flags |
+| `ldflags` | `string` or `string[]` | Extra linker flags |
+| `features` | `table` | Mixed table of preprocessor macro definitions |
+| `headers` | `string[]` | Headers to probe for existence |
+| `funcs` | `{[header]: string[]}` | Functions to probe per header |
+| `types` | `{[header]: string[]}` | C types to probe per header |
+| `decls` | `{[header]: string[]}` | Declarations or macros to probe per header |
+| `sizeof` | `{[header]: string[]}` | Types whose byte size should be measured |
+| `members` | `{[header]: {[ctype]: string[]}}` | Struct or union members to probe |
+
+`features` is a mixed table:
+
+- string keys define `#define NAME VALUE`
+- integer keys define `#define NAME`
+
+Headers referenced from `headers`, `funcs`, `types`, `decls`, `sizeof`, or `members` are probed automatically.
+
+### Validation and Error Handling
+
+- If `module.configh` exists but is not a table, the hook raises an error.
+- `output` is required and must be a string.
+- Unknown keys in `module.configh` are rejected by `configh.generate()`.
+- `features`, `headers`, `funcs`, `types`, `decls`, `sizeof`, and `members` must be tables when present.
+- Configuration and probe-setup errors are raised directly by `configh.generate()`.
+- Header file open/write/close failures are returned from `configh.generate()` and re-raised by the hook with the module label in the error message.
+
+### Notes
+
+- The hook does **not** read sibling module fields such as `module.incdirs`, `module.libdirs`, or `module.libraries`. All compiler/linker inputs must be declared inside `module.configh`.
+- The hook does **not** add the generated header directory to `module.incdirs`. If your C sources include `"config.h"`, add that directory yourself (for example, `"src"` when `output = "src/config.h"`).
+- Place `$(configh)` in `before_build` so the generated header exists before compilation.
+- If a later hook reads `module.configh.report`, place that hook **after** `$(configh)` in the `before_build` list.
+
+### Example
+
+```lua
+rockspec_format = "3.0"
+package = "mypackage"
+version = "1.0-1"
+
+build_dependencies = {
+    "luarocks-build-hooks",
+}
+
+build = {
+    type = "hooks",
+    before_build = {
+        "$(configh)",
+        "scripts/configure.lua", -- can read build.modules.mymod.configh.report
+    },
+    modules = {
+        mymod = {
+            sources   = { "src/mymod.c" },
+            incdirs   = { "src" },
+            configh = {
+                output  = "src/config.h",
+                output_status = true,
+                headers = { "sys/event.h" },
+                funcs = {
+                    ["sys/event.h"] = { "kevent" },
+                },
+            },
+        },
+    },
+}
+```
+
+Later hooks can read the report without requiring `configh` directly:
+
+```lua
+-- scripts/configure.lua
+local rockspec = ...
+local report = rockspec.build.modules.mymod.configh.report
+local supported = report and report["sys/event.h"] and
+                  report["sys/event.h"].is_exists == true
+```
+
 ## License
 
 MIT/X11

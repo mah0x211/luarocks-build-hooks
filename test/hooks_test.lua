@@ -751,4 +751,33 @@ run_test("After Build Parse Failure", function()
                 "Should report after_build error: " .. (err or ""))
 end)
 
+run_test("configh builtin hook loads as a function", function()
+    local rockspec = {
+        variables = {},
+        build = {
+            before_build = "$(configh)",
+            modules = {},
+        },
+    }
+
+    local configh_called = false
+    local function mock_configh(rs)
+        configh_called = true
+    end
+
+    local original_require = _G.require
+    _G.require = function(modname)
+        if modname == "luarocks.build.hooks.configh" then
+            return mock_configh
+        end
+        return original_require(modname)
+    end
+
+    local ok, err = builtin_hook.run(rockspec)
+    _G.require = original_require
+
+    assert_true(ok, "Should run successfully: " .. (err or ""))
+    assert_true(configh_called, "configh hook should have been called")
+end)
+
 print("All tests passed!")

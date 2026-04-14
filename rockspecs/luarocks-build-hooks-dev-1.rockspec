@@ -15,6 +15,7 @@ It also includes a hook to resolve external dependencies using pkg-config.
 }
 dependencies = {
     "lua >= 5.1",
+    "configh >= 0.4.0",
 }
 build = {
     type = "builtin",
@@ -22,6 +23,7 @@ build = {
         ["luarocks.build.hooks"] = "lua/hooks.lua",
         ["luarocks.build.hooks.extra-vars"] = "lua/hooks/extra-vars.lua",
         ["luarocks.build.hooks.pkgconfig"] = "lua/hooks/pkgconfig.lua",
+        ["luarocks.build.hooks.configh"] = "lua/hooks/configh.lua",
         ["luarocks.build.hooks.chdir"] = "src/chdir.c",
     },
 }

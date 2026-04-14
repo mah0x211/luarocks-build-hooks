@@ -3,6 +3,7 @@ runreport = true
 deletestats = true
 modules = {
     ["luarocks.build.hooks"] = "lua/hooks.lua",
+    ["luarocks.build.hooks.configh"] = "lua/hooks/configh.lua",
     ["luarocks.build.hooks.extra-vars"] = "lua/hooks/extra-vars.lua",
     ["luarocks.build.hooks.pkgconfig"] = "lua/hooks/pkgconfig.lua",
 }
