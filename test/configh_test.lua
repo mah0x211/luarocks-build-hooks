@@ -323,7 +323,7 @@ run_test("resolves known $(VAR) in string values", function()
     assert_equal("/usr/include/mylib", cfg.incdirs[1])
 end)
 
-run_test("leaves unknown $(VAR) unchanged", function()
+run_test("errors on unresolved required variable", function()
     local rockspec = make_rockspec({
         ["mymod"] = {
             configh = {
@@ -331,9 +331,22 @@ run_test("leaves unknown $(VAR) unchanged", function()
             },
         },
     }, {})
+    assert_error(function()
+        run_configh(rockspec)
+    end, "UNKNOWN")
+end)
+
+run_test("leaves optional $(VAR)? empty when variable is missing", function()
+    local rockspec = make_rockspec({
+        ["mymod"] = {
+            configh = {
+                output = "$(UNKNOWN)?/config.h",
+            },
+        },
+    }, {})
     run_configh(rockspec)
     assert_equal(1, #mock_generate.calls)
-    assert_equal("$(UNKNOWN)/config.h", mock_generate.calls[1].cfg.output)
+    assert_equal("/config.h", mock_generate.calls[1].cfg.output)
 end)
 
 run_test("resolves $(VAR) in nested table string values", function()
