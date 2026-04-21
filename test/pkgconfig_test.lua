@@ -1360,4 +1360,116 @@ run_test(
                        "error should hint at the variable to set")
     end)
 
-print("All pkgconfig tests passed!")
+-- ============================================================
+-- resvars in pkgdep.header / pkgdep.library
+-- ============================================================
+
+run_test("pkgdep.header: $(VAR) resolved from variables", function()
+    local resolved_header
+    local rockspec = {
+        variables = {
+            MYPKG_DIR = "/my/custom/path",
+            MY_HEADER = "foo.h",
+        },
+        build = {
+            pkgconfig_dependencies = {
+                MYPKG = {
+                    header = "$(MY_HEADER)",
+                },
+            },
+        },
+    }
+    local fs = require("luarocks.fs")
+    local orig_is_file = fs.is_file
+    fs.is_file = function(p)
+        resolved_header = p
+        return true
+    end
+    local ok, err = pcall(resolve_pkgconfig, rockspec)
+    fs.is_file = orig_is_file
+    assert_equal(true, ok, err)
+    assert_not_nil(resolved_header and resolved_header:find("foo.h"),
+                   "header should be resolved to foo.h, got: " ..
+                       tostring(resolved_header))
+end)
+
+run_test("pkgdep.header: $(VAR)? missing → treated as nil (skipped)",
+         function()
+    local rockspec = {
+        variables = {
+            MYPKG_DIR = "/my/custom/path",
+        },
+        build = {
+            pkgconfig_dependencies = {
+                MYPKG = {
+                    header = "$(MY_HEADER)?",
+                },
+            },
+        },
+    }
+    local ok, err = pcall(resolve_pkgconfig, rockspec)
+    assert_equal(true, ok, err)
+end)
+
+run_test("pkgdep.header: $(VAR) missing → error", function()
+    local rockspec = {
+        variables = {},
+        build = {
+            pkgconfig_dependencies = {
+                MYPKG = {
+                    header = "$(MY_HEADER)",
+                },
+            },
+        },
+    }
+    local ok, err = pcall(resolve_pkgconfig, rockspec)
+    assert_equal(false, ok, "should raise for unresolved required variable")
+    assert_not_nil(err:find("MY_HEADER"),
+                   "error should mention the variable name")
+end)
+
+run_test("pkgdep.library: $(VAR) resolved from variables", function()
+    local resolved_lib
+    local rockspec = {
+        variables = {
+            MYPKG_DIR = "/my/custom/path",
+            MY_LIB = "mylib",
+        },
+        build = {
+            pkgconfig_dependencies = {
+                MYPKG = {
+                    library = "$(MY_LIB)",
+                },
+            },
+        },
+    }
+    local fs = require("luarocks.fs")
+    local orig_is_file = fs.is_file
+    fs.is_file = function(p)
+        resolved_lib = p
+        return true
+    end
+    local ok, err = pcall(resolve_pkgconfig, rockspec)
+    fs.is_file = orig_is_file
+    assert_equal(true, ok, err)
+    assert_not_nil(resolved_lib and resolved_lib:find("mylib"),
+                   "library should be resolved to mylib, got: " ..
+                       tostring(resolved_lib))
+end)
+
+run_test("pkgdep.library: $(VAR) missing → error", function()
+    local rockspec = {
+        variables = {},
+        build = {
+            pkgconfig_dependencies = {
+                MYPKG = {
+                    library = "$(MY_LIB)",
+                },
+            },
+        },
+    }
+    local ok, err = pcall(resolve_pkgconfig, rockspec)
+    assert_equal(false, ok, "should raise for unresolved required variable")
+    assert_not_nil(err:find("MY_LIB"), "error should mention the variable name")
+end)
+print('All pkgconfig tests passed')
