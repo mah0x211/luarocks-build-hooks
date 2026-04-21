@@ -22,6 +22,7 @@
 local concat = table.concat
 local util = require('luarocks.util')
 local fs = require('luarocks.fs')
+local resvars = require('luarocks.build.hooks.lib.resvars')
 
 --- Process a libraries array, expanding any standalone $(VAR_NAME) entries into
 --- individual library names. Raises an error if the reference is embedded within
@@ -801,6 +802,22 @@ end
 --- @param pkgdep table The pkgconfig_dependencies entry (may have header/library fields)
 --- @return pkginfo pkginfo
 local function make_pkginfo(rockspec, name, pkgdep)
+    local variables = rockspec.variables
+    for _, field in ipairs({
+        'header',
+        'library',
+    }) do
+        local v = pkgdep[field]
+        if v ~= nil then
+            local resolved, err = resvars(v, variables)
+            if err then
+                error(
+                    ('hooks.pkgconfig: pkgconfig_dependencies[%q].%s: %s'):format(
+                        name, field, err))
+            end
+            pkgdep[field] = resolved
+        end
+    end
     validate_pkgdep(name, pkgdep)
     local raw_prefix = name:upper() .. '_'
     local prefix = normalize_varname(raw_prefix)
