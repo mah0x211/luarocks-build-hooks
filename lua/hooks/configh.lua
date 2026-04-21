@@ -19,10 +19,10 @@
 -- OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 -- THE SOFTWARE.
 --
-local pairs = pairs
 local type = type
 local format = string.format
 local generate = require('configh.generate')
+local resvars = require('luarocks.build.hooks.lib.resvars')
 local util = require('luarocks.util')
 
 --- Normalize cfg.libs: split any space-separated string entries into
@@ -37,28 +37,6 @@ local function normalize_libs(libs)
         end
     end
     return result
-end
-
---- Resolve $(VAR) placeholders in all string values inside a table,
---- recursively. Modifies the table in-place and returns it.
---- @param tbl table
---- @param variables table  rockspec.variables
---- @return table
-local function resolve_vars(tbl, variables)
-    for k, v in pairs(tbl) do
-        if type(v) == 'string' then
-            tbl[k] = v:gsub('%$%(([^)]+)%)', function(name)
-                local val = variables[name]
-                if type(val) == 'string' then
-                    return val
-                end
-                return '$(' .. name .. ')'
-            end)
-        elseif type(v) == 'table' then
-            resolve_vars(v, variables)
-        end
-    end
-    return tbl
 end
 
 --- Deep-copy a table, avoiding reference cycles.
@@ -107,15 +85,18 @@ local function run_configh(rockspec)
             end
             util.printout(format('hooks.configh: processing %s ...', modname))
 
+            local label = format('build.modules[%q].configh', modname)
             local cfg = copy_table(modtbl.configh)
-            resolve_vars(cfg, variables)
+            local _, err = resvars(cfg, variables)
+            if err then
+                error(format('hooks.configh: %s: %s', label, err))
+            end
 
             if type(cfg.libs) == 'table' then
                 cfg.libs = normalize_libs(cfg.libs)
             end
-
-            local label = format('build.modules[%q].configh', modname)
-            local report, err = generate(cfg, label)
+            local report
+            report, err = generate(cfg, label)
             if err then
                 error(format('hooks.configh: %s: %s', label, err))
             end
