@@ -443,6 +443,72 @@ run_test("Invalid conditional variables value type", function()
     assert_not_nil(err:match('conditional_variables%["FLAG"%] must be a table'))
 end)
 
+-- ============================================================
+-- resvars in extra_variables / conditional_variables values
+-- ============================================================
+
+run_test("extra_variables: $(VAR) resolved before appending", function()
+    local rockspec = create_rockspec({
+        CFLAGS = "-O2",
+        EXTRA_FLAG = "-Wall",
+    }, {
+        CFLAGS = "$(EXTRA_FLAG)",
+    })
+    append_extra_vars(rockspec)
+    assert_match("^%-O2 %-Wall$", rockspec.variables.CFLAGS,
+                 "CFLAGS should have resolved value appended")
+end)
+
+run_test("extra_variables: $(VAR)? missing → empty → skipped", function()
+    local rockspec = create_rockspec({
+        CFLAGS = "-O2",
+    }, {
+        CFLAGS = "$(MISSING_FLAG)?",
+    })
+    append_extra_vars(rockspec)
+    assert_equal("-O2", rockspec.variables.CFLAGS,
+                 "CFLAGS should be unchanged when optional var is missing")
+end)
+
+run_test("extra_variables: $(VAR) missing → error", function()
+    local rockspec = create_rockspec({
+        CFLAGS = "-O2",
+    }, {
+        CFLAGS = "$(MISSING_FLAG)",
+    })
+    local ok, err = pcall(append_extra_vars, rockspec)
+    assert_equal(false, ok, "should raise for unresolved required variable")
+    assert_not_nil(err:find("MISSING_FLAG"),
+                   "error should mention the variable name")
+end)
+
+run_test("extra_variables: $(VAR:env) resolved from env", function()
+    setenv("MY_ENV_FLAG", "-Wextra")
+    local rockspec = create_rockspec({
+        CFLAGS = "-O2",
+    }, {
+        CFLAGS = "$(MY_ENV_FLAG:env)",
+    })
+    append_extra_vars(rockspec)
+    assert_match("^%-O2 %-Wextra$", rockspec.variables.CFLAGS,
+                 "CFLAGS should have env-resolved value appended")
+end)
+
+run_test("conditional_variables: $(VAR) resolved before appending", function()
+    setenv("MY_FLAG", "1")
+    local rockspec = create_rockspec({
+        CFLAGS = "-O2",
+        EXTRA_FLAG = "-coverage",
+    }, nil, {
+        MY_FLAG = {
+            CFLAGS = "$(EXTRA_FLAG)",
+        },
+    })
+    append_extra_vars(rockspec)
+    assert_match("^%-O2 %-coverage$", rockspec.variables.CFLAGS,
+                 "CFLAGS should have resolved value from conditional")
+end)
+
 -- Restore original getenv
 os.getenv = getenv -- luacheck: ignore
 print("All extra-vars tests passed!")

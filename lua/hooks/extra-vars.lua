@@ -21,6 +21,7 @@
 --
 local concat = table.concat
 local util = require("luarocks.util")
+local resvars = require("luarocks.build.hooks.lib.resvars")
 
 --- Validate and normalize variable values
 --- @param value any variable value
@@ -95,6 +96,12 @@ local function append_vars(variables, extvars, target)
         value, err = validate_value(value)
         if err then
             error(("  %s[%q] " .. err):format(target, tostring(name)))
+        end
+
+        -- resolve variable expressions in value
+        value, err = resvars(value, variables)
+        if err then
+            error(("  %s[%q] %s"):format(target, tostring(name), err))
         end
 
         -- get existing variable
