@@ -25,6 +25,83 @@ local builtin = require("luarocks.build.builtin")
 local fs = require("luarocks.fs")
 local util = require("luarocks.util")
 local chdir = require("luarocks.build.hooks.chdir")
+local resvars = require("luarocks.build.hooks.lib.resvars")
+
+local function resolve_value(value, variables)
+    if type(value) == 'string' then
+        return resvars(value, variables)
+    elseif type(value) ~= 'table' then
+        return value
+    end
+
+    local t = {}
+    for _, v in ipairs(value) do
+        local resolved, err = resolve_value(v, variables)
+        if err then
+            return nil, err
+        elseif resolved ~= nil then
+            t[#t + 1] = resolved
+        end
+    end
+    return t
+end
+
+-- Whitelisted per-module fields: true = error when resolved to empty,
+-- false = delete field when resolved to empty.
+local MODULE_FIELDS = {
+    sources = true,
+    incdirs = false,
+    libdirs = false,
+    libraries = false,
+    defines = false,
+}
+
+local function resolve_mod_fields(mname, mod, variables)
+    for field, required in pairs(MODULE_FIELDS) do
+        if mod[field] ~= nil then
+            local v, err = resolve_value(mod[field], variables)
+            if err then
+                return nil,
+                       ("build.modules[%q].%s %s"):format(mname, field, err)
+            elseif not v or (type(v) == 'table' and #v == 0) then
+                if required then
+                    return nil,
+                           ("build.modules[%q].%s resolved to empty string"):format(
+                               mname, field)
+                end
+                v = nil
+            end
+            mod[field] = v
+        end
+    end
+    return true
+end
+
+local function resolve_modvars(rockspec)
+    local modules = rockspec.build and rockspec.build.modules
+    if type(modules) ~= 'table' then
+        return true
+    end
+
+    local variables = rockspec.variables
+    for mname, mod in pairs(modules) do
+        if type(mod) == 'string' then
+            local v, err = resolve_value(mod, variables)
+            if not v then
+                return nil, ("build.modules[%q] %s"):format(mname, err or
+                                                                "path resolved to empty string")
+            end
+            modules[mname] = v
+        elseif type(mod) == 'table' then
+            local ok, err = resolve_mod_fields(mname, mod, variables)
+            if not ok then
+                return nil, err
+            end
+        end
+    end
+
+    return true
+end
 
 --- Create a shallow copy of a table, recursively copying any nested tables.
 local function copy_table(tbl, visited)
@@ -270,13 +347,19 @@ local function run_hooks(rockspec, no_install)
         end
     end
 
-    -- 2. Delegate to standard builtin backend
+    -- 2. Resolve variables in whitelisted module fields
+    ok, err = resolve_modvars(rockspec)
+    if not ok then
+        return nil, err
+    end
+
+    -- 3. Delegate to standard builtin backend
     ok, err = builtin.run(rockspec, no_install)
     if not ok then
         return nil, err
     end
 
-    -- 3. Run after_build if present
+    -- 4. Run after_build if present
     for _, hook in ipairs(after_hooks) do
         util.printout("Running hook: " .. hook.value)
         ok, err = run_hook(hook, rockspec)

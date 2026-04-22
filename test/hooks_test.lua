@@ -780,4 +780,153 @@ run_test("configh builtin hook loads as a function", function()
     assert_true(configh_called, "configh hook should have been called")
 end)
 
+-- ============================================================
+-- resolve_modules: global variable resolve pass (step 2)
+-- ============================================================
+
+run_test("resolve_modules: string module path $(VAR) resolved", function()
+    local rockspec = {
+        variables = {
+            MY_PATH = "lib/mymod.lua",
+        },
+        build = {
+            modules = {
+                mymod = "$(MY_PATH)",
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. (err or ""))
+    assert_equal("lib/mymod.lua", rockspec.build.modules.mymod,
+                 "Module path should be resolved")
+end)
+
+run_test("resolve_modules: string path required $(VAR) missing → error",
+         function()
+    local rockspec = {
+        variables = {},
+        build = {
+            modules = {
+                mymod = "$(MISSING_PATH)",
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_false(ok, "Should fail")
+    assert_true(err:find("MISSING_PATH") ~= nil,
+                "Error should mention the variable name")
+end)
+
+run_test("resolve_modules: sources array $(VAR) resolved", function()
+    local rockspec = {
+        variables = {
+            SRC = "src/foo.c",
+        },
+        build = {
+            modules = {
+                mymod = {
+                    sources = {
+                        "$(SRC)",
+                        "src/bar.c",
+                    },
+                },
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. (err or ""))
+    assert_equal("src/foo.c", rockspec.build.modules.mymod.sources[1])
+    assert_equal("src/bar.c", rockspec.build.modules.mymod.sources[2])
+end)
+
+run_test("resolve_modules: sources all-optional missing → error", function()
+    local rockspec = {
+        variables = {},
+        build = {
+            modules = {
+                mymod = {
+                    sources = {
+                        "$(MISSING_SRC)?",
+                    },
+                },
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_false(ok, "Should fail when sources resolve to empty")
+    assert_true(err:find("resolved to empty") ~= nil,
+                "Error should mention 'resolved to empty'")
+end)
+
+run_test("resolve_modules: incdirs optional missing → field deleted",
+         function()
+    local rockspec = {
+        variables = {},
+        build = {
+            modules = {
+                mymod = {
+                    sources = {
+                        "src/foo.c",
+                    },
+                    incdirs = {
+                        "$(MISSING_INC)?",
+                    },
+                },
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. (err or ""))
+    assert_equal(nil, rockspec.build.modules.mymod.incdirs,
+                 "incdirs should be removed when all elements are empty")
+end)
+
+run_test(
+    "resolve_modules: required field array element with unresolvable var → error",
+    function()
+        -- sources is required; an unresolvable required $(VAR) inside the array
+        -- triggers the error path in resolve_value (return nil, err) and then
+        -- resolve_mod_fields wraps it with a field-qualified message.
+        local rockspec = {
+            variables = {},
+            build = {
+                modules = {
+                    mymod = {
+                        sources = {
+                            "$(MISSING_SRC)",
+                        },
+                    },
+                },
+            },
+        }
+        local ok, err = builtin_hook.run(rockspec)
+        assert_false(ok, "Should fail for unresolvable required variable")
+        assert_true(err:find("MISSING_SRC") ~= nil,
+                    "error should name the missing variable")
+        assert_true(err:find("sources") ~= nil, "error should name the field")
+    end)
+
+run_test(
+    "resolve_modules: non-string/non-table module field value is passed through",
+    function()
+        -- resolve_value returns non-string/non-table values unchanged (pass-through).
+        local rockspec = {
+            variables = {},
+            build = {
+                modules = {
+                    mymod = {
+                        sources = {
+                            "src/foo.c",
+                        },
+                        incdirs = true,
+                    },
+                },
+            },
+        }
+        local ok, err = builtin_hook.run(rockspec)
+        assert_true(ok, "Should succeed: " .. (err or ""))
+        assert_equal(true, rockspec.build.modules.mymod.incdirs,
+                     "non-string/non-table field value should be preserved as-is")
+    end)
+
 print("All tests passed!")
