@@ -93,10 +93,10 @@ run_test("$(VAR)? resolved from variables", function()
     assert_equal("bar", result)
 end)
 
-run_test("$(VAR)? missing → empty string", function()
+run_test("$(VAR)? missing → nil", function()
     local result, err = resvars("$(FOO)?", {})
     assert_nil(err)
-    assert_equal("", result)
+    assert_nil(result)
 end)
 
 run_test("$(VAR)? missing → replaces only the token", function()
@@ -126,10 +126,10 @@ run_test("$(VAR|env) missing in both → error", function()
     assert_error("unresolved required variable", result, err)
 end)
 
-run_test("$(VAR|env)? missing in both → empty string", function()
+run_test("$(VAR|env)? missing in both → nil", function()
     local result, err = resvars("$(FOO|env)?", {})
     assert_nil(err)
-    assert_equal("", result)
+    assert_nil(result)
 end)
 
 run_test("$(VAR:env) resolved from env", function()
@@ -148,12 +148,12 @@ run_test("$(VAR:env) not in env → error", function()
     assert_error("unresolved required variable", result, err)
 end)
 
-run_test("$(VAR:env)? not in env → empty string", function()
+run_test("$(VAR:env)? not in env → nil", function()
     local result, err = resvars("$(FOO:env)?", {
         FOO = "from_vars",
     })
     assert_nil(err)
-    assert_equal("", result)
+    assert_nil(result)
 end)
 
 run_test("$(VAR:env)? resolved from env", function()
@@ -197,19 +197,30 @@ run_test("no expressions → string is unchanged", function()
     assert_equal("no variables here", result)
 end)
 
-run_test("empty string → empty string", function()
+run_test("empty string → nil", function()
     local result, err = resvars("", {})
     assert_nil(err)
-    assert_equal("", result)
+    assert_nil(result)
 end)
 
-run_test("variable value is empty string → resolved to empty string", function()
-    local result, err = resvars("$(FOO)", {
-        FOO = "",
-    })
-    assert_nil(err)
-    assert_equal("", result)
-end)
+run_test(
+    "variable value is empty string → treated as missing (required) → error",
+    function()
+        local result, err = resvars("$(FOO)", {
+            FOO = "",
+        })
+        assert_error("unresolved required variable", result, err)
+    end)
+
+run_test(
+    "variable value is empty string → treated as missing (optional) → nil",
+    function()
+        local result, err = resvars("$(FOO)?", {
+            FOO = "",
+        })
+        assert_nil(err)
+        assert_nil(result)
+    end)
 
 run_test("non-string variable value treated as missing (required)", function()
     local result, err = resvars("$(FOO)", {
@@ -223,13 +234,13 @@ run_test("non-string variable value treated as missing (optional)", function()
         FOO = 42,
     })
     assert_nil(err)
-    assert_equal("", result)
+    assert_nil(result)
 end)
 
 run_test("nil variables defaults to empty table (all optional)", function()
     local result, err = resvars("$(FOO)?", nil)
     assert_nil(err)
-    assert_equal("", result)
+    assert_nil(result)
 end)
 
 run_test("$(VAR) where variables is nil treats variable as missing", function()
@@ -255,7 +266,7 @@ end)
 
 -- ── table input ───────────────────────────────────────────────────────────────
 
-run_test("table: resolves string values in-place", function()
+run_test("table: resolves string values, returns new table", function()
     local t = {
         a = "$(FOO)",
         b = "$(BAR)",
@@ -265,12 +276,14 @@ run_test("table: resolves string values in-place", function()
         BAR = "bar",
     })
     assert_nil(err)
-    assert_equal(t, result) -- same table returned
-    assert_equal("foo", t.a)
-    assert_equal("bar", t.b)
+    assert_equal("foo", result.a)
+    assert_equal("bar", result.b)
+    -- input must not be modified
+    assert_equal("$(FOO)", t.a)
+    assert_equal("$(BAR)", t.b)
 end)
 
-run_test("table: resolves nested table string values", function()
+run_test("table: resolves nested table string values in new table", function()
     local t = {
         nested = {
             x = "$(FOO)",
@@ -280,11 +293,12 @@ run_test("table: resolves nested table string values", function()
         FOO = "resolved",
     })
     assert_nil(err)
-    assert_equal(t, result)
-    assert_equal("resolved", t.nested.x)
+    assert_equal("resolved", result.nested.x)
+    -- input must not be modified
+    assert_equal("$(FOO)", t.nested.x)
 end)
 
-run_test("table: non-string values are left unchanged", function()
+run_test("table: non-string values are preserved in new table", function()
     local inner = {}
     local t = {
         num = 42,
@@ -293,7 +307,9 @@ run_test("table: non-string values are left unchanged", function()
     }
     local result, err = resvars(t, {})
     assert_nil(err)
-    assert_equal(t, result)
+    assert_equal(42, result.num)
+    assert_equal(true, result.bool)
+    -- input must not be modified
     assert_equal(42, t.num)
     assert_equal(true, t.bool)
     assert_equal(inner, t.tbl)
@@ -307,14 +323,64 @@ run_test("table: error returned for required missing variable", function()
     assert_error("unresolved required variable", result, err)
 end)
 
-run_test("table: nil variables defaults to empty table", function()
+run_test("table: optional nil var dropped from result table", function()
     local t = {
         a = "$(FOO)?",
     }
     local result, err = resvars(t, nil)
     assert_nil(err)
-    assert_equal(t, result)
-    assert_equal("", t.a)
+    assert_nil(result.a, "optional key with missing var should be absent")
+    -- input must not be modified
+    assert_equal("$(FOO)?", t.a)
+end)
+
+run_test("table: returns new table (not same reference as input)", function()
+    local t = {
+        a = "hello",
+    }
+    local result, err = resvars(t, {})
+    assert_nil(err)
+    if result == t then
+        error("resvars should return a new table, not the same reference")
+    end
+    assert_equal("hello", result.a)
+end)
+
+run_test("table: array element resolving to nil is dropped (dense rebuild)",
+         function()
+    local t = {
+        "$(PRESENT)",
+        "$(MISSING)?",
+        "literal",
+    }
+    local result, err = resvars(t, {
+        PRESENT = "found",
+    })
+    assert_nil(err)
+    assert_equal(2, #result)
+    assert_equal("found", result[1])
+    assert_equal("literal", result[2])
+end)
+
+run_test("table: map key resolving to nil is dropped", function()
+    local t = {
+        keep = "hello",
+        drop = "$(MISSING)?",
+    }
+    local result, err = resvars(t, {})
+    assert_nil(err)
+    assert_equal("hello", result.keep)
+    assert_nil(result.drop)
+end)
+
+run_test("table: empty child table is preserved", function()
+    local t = {
+        sub = {},
+    }
+    local result, err = resvars(t, {})
+    assert_nil(err)
+    assert_equal("table", type(result.sub))
+    assert_equal(0, #result.sub)
 end)
 
 -- ── invalid input ─────────────────────────────────────────────────────────────
