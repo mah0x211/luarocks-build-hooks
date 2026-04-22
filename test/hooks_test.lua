@@ -881,4 +881,52 @@ run_test("resolve_modules: incdirs optional missing → field deleted",
                  "incdirs should be removed when all elements are empty")
 end)
 
+run_test(
+    "resolve_modules: required field array element with unresolvable var → error",
+    function()
+        -- sources is required; an unresolvable required $(VAR) inside the array
+        -- triggers the error path in resolve_value (return nil, err) and then
+        -- resolve_mod_fields wraps it with a field-qualified message.
+        local rockspec = {
+            variables = {},
+            build = {
+                modules = {
+                    mymod = {
+                        sources = {
+                            "$(MISSING_SRC)",
+                        },
+                    },
+                },
+            },
+        }
+        local ok, err = builtin_hook.run(rockspec)
+        assert_false(ok, "Should fail for unresolvable required variable")
+        assert_true(err:find("MISSING_SRC") ~= nil,
+                    "error should name the missing variable")
+        assert_true(err:find("sources") ~= nil, "error should name the field")
+    end)
+
+run_test(
+    "resolve_modules: non-string/non-table module field value is passed through",
+    function()
+        -- resolve_value returns non-string/non-table values unchanged (pass-through).
+        local rockspec = {
+            variables = {},
+            build = {
+                modules = {
+                    mymod = {
+                        sources = {
+                            "src/foo.c",
+                        },
+                        incdirs = true,
+                    },
+                },
+            },
+        }
+        local ok, err = builtin_hook.run(rockspec)
+        assert_true(ok, "Should succeed: " .. (err or ""))
+        assert_equal(true, rockspec.build.modules.mymod.incdirs,
+                     "non-string/non-table field value should be preserved as-is")
+    end)
+
 print("All tests passed!")

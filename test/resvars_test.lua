@@ -264,6 +264,15 @@ run_test("error message includes modifier in expression", function()
     assert_error("%$%(MY_VAR|env%)", result, err)
 end)
 
+run_test(
+    "string with multiple required missing vars → first error reported (early exit)",
+    function()
+        -- The gsub callback sets errmsg on the first missing required var and then
+        -- returns early (without setting errmsg again) for any subsequent variable.
+        local result, err = resvars("$(MISSING1) and $(MISSING2)", {})
+        assert_error("MISSING1", result, err)
+    end)
+
 -- ── table input ───────────────────────────────────────────────────────────────
 
 run_test("table: resolves string values, returns new table", function()
@@ -382,6 +391,37 @@ run_test("table: empty child table is preserved", function()
     assert_equal("table", type(result.sub))
     assert_equal(0, #result.sub)
 end)
+
+run_test("table: array element that is a table → nested rebuild", function()
+    local t = {
+        "prefix",
+        {
+            key = "$(VAR)",
+        },
+        "suffix",
+    }
+    local result, err = resvars(t, {
+        VAR = "hello",
+    })
+    assert_nil(err)
+    assert_equal(3, #result)
+    assert_equal("prefix", result[1])
+    assert_equal("table", type(result[2]))
+    assert_equal("hello", result[2].key)
+    assert_equal("suffix", result[3])
+end)
+
+run_test(
+    "table: array element that is a table with missing required var → error",
+    function()
+        local t = {
+            {
+                key = "$(MISSING)",
+            },
+        }
+        local result, err = resvars(t, {})
+        assert_error("MISSING", result, err)
+    end)
 
 -- ── invalid input ─────────────────────────────────────────────────────────────
 

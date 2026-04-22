@@ -296,6 +296,35 @@ run_test("Handle io.popen failure in find_package", function()
     assert_equal(nil, rockspec.variables.POPEN_FAIL_FIND_LIBDIR)
 end)
 
+run_test("Handle io.popen failure with nil error → 'unknown error' fallback",
+         function()
+    -- When get_pkg_variables fails and io.popen returns (nil, nil) (no message),
+    -- the printout falls back to the 'unknown error' literal.
+    local rockspec = {
+        variables = {},
+        build = {
+            pkgconfig_dependencies = {
+                NOERR_FAIL_TEST = {},
+            },
+        },
+    }
+
+    local call_count = 0
+    local old_popen = _G.io.popen
+    _G.io.popen = function(cmd)
+        call_count = call_count + 1
+        if call_count == 1 then
+            return make_fake_file("NOERR_FAIL_TEST\n")
+        end
+        return nil, nil
+    end
+
+    resolve_pkgconfig(rockspec)
+    _G.io.popen = old_popen
+
+    assert_equal(nil, rockspec.variables.NOERR_FAIL_TEST_INCDIR)
+end)
+
 if zlib_available then
     run_test("Continue processing remaining deps when one is not in pkg-config",
              function()
@@ -731,6 +760,102 @@ run_test("Modules without dep var refs are not modified by get_target_modules",
                  "unrelated module libraries should remain a string")
     assert_equal("other_lib", rockspec.build.modules.unrelated.libraries)
 end)
+
+run_test("check_target_field: non-string/non-table module field → error",
+         function()
+    -- check_target_field is called for each module field that may contain dep
+    -- variable references. A non-string/non-table value triggers an error.
+    local rockspec = {
+        variables = {},
+        build = {
+            pkgconfig_dependencies = {
+                BADMOD = {},
+            },
+            modules = {
+                mymod = {
+                    libraries = 42,
+                },
+            },
+        },
+    }
+
+    local call_count = 0
+    local old_popen = _G.io.popen
+    _G.io.popen = function(cmd)
+        call_count = call_count + 1
+        if call_count == 1 then
+            return make_fake_file("BADMOD\n")
+        end
+        return make_fake_file("prefix=/opt/badmod\n" ..
+                                  "includedir=/opt/badmod/include\n" ..
+                                  "libdir=/opt/badmod/lib\n" ..
+                                  "Libs=-L/opt/badmod/lib -lbadmod\n" ..
+                                  "Modversion=1.0\n")
+    end
+
+    local ok, err = pcall(resolve_pkgconfig, rockspec)
+    _G.io.popen = old_popen
+    assert_equal(false, ok, "should raise for bad module field type")
+    assert_not_nil(err:find("mymod"), "error should mention the module name")
+    assert_not_nil(err:find("libraries"), "error should mention the field name")
+    assert_not_nil(err:find("number"), "error should mention the bad type")
+end)
+
+run_test(
+    "update_variables: user-set non-standard variable with dep prefix is removed",
+    function()
+        -- When the user sets a variable with the dep prefix (e.g. MYPKG_CUSTOM)
+        -- and pkg-config processing does not produce that key in the result,
+        -- update_variables logs it as "removed".
+        local rockspec = {
+            variables = {
+                MYPKG_DIR = "/usr/local",
+                MYPKG_CUSTOM_EXTRA = "old_value",
+            },
+            build = {
+                pkgconfig_dependencies = {
+                    MYPKG = {},
+                },
+            },
+        }
+
+        resolve_pkgconfig(rockspec)
+
+        -- MYPKG_CUSTOM_EXTRA is logged as "removed" (covered) but not deleted from variables;
+        -- the standard INCDIR and LIBDIR derived from DIR must be set
+        assert_equal("old_value", rockspec.variables.MYPKG_CUSTOM_EXTRA,
+                     "non-standard variable is logged as removed but stays in variables table")
+        assert_not_nil(rockspec.variables.MYPKG_INCDIR,
+                       "INCDIR should be derived from DIR")
+        assert_not_nil(rockspec.variables.MYPKG_LIBDIR,
+                       "LIBDIR should be derived from DIR")
+    end)
+
+run_test(
+    "variable key normalization: hyphen-containing dep prefix variables are normalized",
+    function()
+        -- When the dep name contains hyphens (e.g. "LIBPCRE2-8"), user variables
+        -- stored under the raw prefix ("LIBPCRE2-8_DIR") are normalized to valid
+        -- identifier form ("LIBPCRE2_8_DIR") during make_pkginfo.
+        local rockspec = {
+            variables = {
+                ["LIBPCRE2-8_DIR"] = "/opt/pcre2",
+            },
+            build = {
+                pkgconfig_dependencies = {
+                    ["LIBPCRE2-8"] = {},
+                },
+            },
+        }
+
+        resolve_pkgconfig(rockspec)
+
+        -- The normalized key should be set; the raw key should be gone
+        assert_not_nil(rockspec.variables.LIBPCRE2_8_DIR,
+                       "normalized LIBPCRE2_8_DIR should be set")
+        assert_equal(nil, rockspec.variables["LIBPCRE2-8_DIR"],
+                     "raw LIBPCRE2-8_DIR should be removed")
+    end)
 
 -- resolve_args tests
 
@@ -1187,6 +1312,25 @@ run_test("validate_pkgdep: header as number → error", function()
     assert_not_nil(err:find("number"), "error should mention the bad type")
 end)
 
+run_test(
+    "validate_pkgdep: header as whitespace-only string → normalized to nil",
+    function()
+        -- A whitespace-only string survives resvars (non-empty) but is then
+        -- normalized to nil by validate_pkgdep (whitespace-only check).
+        local rockspec = {
+            variables = {},
+            build = {
+                pkgconfig_dependencies = {
+                    MYPKG = {
+                        header = "   ",
+                    },
+                },
+            },
+        }
+        local ok, err = pcall(resolve_pkgconfig, rockspec)
+        assert_equal(true, ok, err)
+    end)
+
 -- ============================================================
 -- Array header / library support
 -- ============================================================
@@ -1472,4 +1616,114 @@ run_test("pkgdep.library: $(VAR) missing → error", function()
     assert_equal(false, ok, "should raise for unresolved required variable")
     assert_not_nil(err:find("MY_LIB"), "error should mention the variable name")
 end)
+
+-- ============================================================
+-- expand_libraries: multi-library expansion
+-- ============================================================
+
+run_test(
+    "expand_libraries: lib array entries without dep var ref are passed through",
+    function()
+        -- When expand_lib_vars processes a module whose libraries array does NOT
+        -- contain a $(MYLIB_2_LIB) reference, expand_libraries finds no var-ref
+        -- entries (changed=false) and returns the original libs table unchanged.
+        -- Lines 742 (else branch) and 748 (return libs) are both exercised here.
+        local rockspec = {
+            variables = {
+                -- User provides DIR so resolve_one is skipped; resolve_args runs.
+                ["MYLIB-2_DIR"] = "/opt/mylib2",
+            },
+            build = {
+                pkgconfig_dependencies = {
+                    ["MYLIB-2"] = {
+                        library = {
+                            "lib1",
+                            "lib2",
+                        },
+                    },
+                },
+                modules = {
+                    mymod = {
+                        -- incdirs references the raw dep var → puts this module in targets
+                        incdirs = {
+                            "$(MYLIB-2_INCDIR)",
+                        },
+                        -- libraries has NO dep var reference → expand_libraries finds
+                        -- changed=false and returns the original table
+                        libraries = {
+                            "other-lib",
+                        },
+                    },
+                },
+            },
+        }
+
+        local fs = require("luarocks.fs")
+        local orig_is_file = fs.is_file
+        fs.is_file = function(path)
+            return path:find("/opt/mylib2", 1, true) ~= nil
+        end
+
+        resolve_pkgconfig(rockspec)
+        fs.is_file = orig_is_file
+
+        -- libraries should be unchanged (no dep var → no expansion)
+        local libs = rockspec.build.modules.mymod.libraries
+        assert_equal("table", type(libs), "libraries should remain a table")
+        assert_equal(1, #libs, "should still have 1 entry")
+        assert_equal("other-lib", libs[1], "entry should be unchanged")
+    end)
+
+run_test(
+    "expand_libraries: entries without dep var ref are kept alongside expanded entries",
+    function()
+        -- When the libraries array has a mix of entries — some with $(MYLIB_2_LIB)
+        -- and some without — expand_libraries keeps the non-ref entries in new_libs
+        -- (line 742) and appends the expanded library names.
+        local rockspec = {
+            variables = {
+                ["MYLIB-2_DIR"] = "/opt/mylib2",
+            },
+            build = {
+                pkgconfig_dependencies = {
+                    ["MYLIB-2"] = {
+                        library = {
+                            "lib1",
+                            "lib2",
+                        },
+                    },
+                },
+                modules = {
+                    mymod = {
+                        incdirs = {
+                            "$(MYLIB-2_INCDIR)",
+                        },
+                        -- First entry has dep var ref; second does not.
+                        libraries = {
+                            "$(MYLIB-2_LIB)",
+                            "other-lib",
+                        },
+                    },
+                },
+            },
+        }
+
+        local fs = require("luarocks.fs")
+        local orig_is_file = fs.is_file
+        fs.is_file = function(path)
+            return path:find("/opt/mylib2", 1, true) ~= nil
+        end
+
+        resolve_pkgconfig(rockspec)
+        fs.is_file = orig_is_file
+
+        -- $(MYLIB-2_LIB) expands to lib1 + lib2; "other-lib" is preserved
+        local libs = rockspec.build.modules.mymod.libraries
+        assert_equal("table", type(libs), "libraries should be a table")
+        assert_equal(3, #libs, "should have 3 entries after expansion")
+        assert_equal("other-lib", libs[1], "non-ref entry should be first")
+        assert_equal("lib1", libs[2], "expanded lib1 should follow")
+        assert_equal("lib2", libs[3], "expanded lib2 should follow")
+    end)
+
 print('All pkgconfig tests passed')
