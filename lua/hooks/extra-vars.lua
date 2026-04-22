@@ -111,7 +111,7 @@ local function append_vars(variables, extvars, target)
                 ("  skipping %s: %s.%s is not a string or empty"):format(name,
                                                                          target,
                                                                          name))
-        elseif #value == 0 then
+        elseif not value then
             -- skip empty value
             util.printout(("  skipping %s: extra value is empty"):format(name))
         else

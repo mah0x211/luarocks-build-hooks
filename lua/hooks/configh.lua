@@ -51,12 +51,10 @@ local function copy_table(tbl, visited)
     local t2 = {}
     visited[tbl] = t2
     for k, v in pairs(tbl) do
-        if k ~= 'report' then
-            if type(v) == 'table' then
-                v = copy_table(v, visited)
-            end
-            t2[k] = v
+        if type(v) == 'table' then
+            v = copy_table(v, visited)
         end
+        t2[k] = v
     end
     return t2
 end
@@ -87,7 +85,9 @@ local function run_configh(rockspec)
 
             local label = format('build.modules[%q].configh', modname)
             local cfg = copy_table(modtbl.configh)
-            local _, err = resvars(cfg, variables)
+            local err
+            cfg.report = nil
+            cfg, err = resvars(cfg, variables)
             if err then
                 error(format('hooks.configh: %s: %s', label, err))
             end

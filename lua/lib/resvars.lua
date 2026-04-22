@@ -20,18 +20,27 @@
 -- THE SOFTWARE.
 --
 -- Supported syntax:
---   $(VAR)      - required; error if not found in rockspec.variables
---   $(VAR)?     - optional; empty string if not found in rockspec.variables
+--   $(VAR)      - required; error if not found or empty in rockspec.variables
+--   $(VAR)?     - optional; nil if not found or empty in rockspec.variables
 --   $(VAR|env)  - required; try rockspec.variables, then os.getenv
 --   $(VAR:env)  - required; os.getenv only
 --   $(VAR|env)? - optional version of $(VAR|env)
 --   $(VAR:env)? - optional version of $(VAR:env)
+--
+-- An empty string ("") in variables or os.getenv is treated as missing.
+--
+-- For string input:  returns nil if the final result is empty.
+-- For table input:   returns a new table (does not modify the input).
+--   - Array elements resolving to nil are dropped (dense rebuild).
+--   - Map keys resolving to nil are omitted.
+--   - Empty child tables ({}) are preserved.
 --
 -- Variable names must match [%a][%w_]* (LuaRocks-compatible identifiers).
 -- Unrecognized patterns (e.g. raw pkgconfig refs with hyphens) are left as-is.
 -- Substitution is single-pass: values are not re-expanded.
 --
 local type = type
+local ipairs = ipairs
 local pairs = pairs
 local format = string.format
 
@@ -47,7 +56,7 @@ local MODIFIER = {
     [':env'] = FROM_ENV,
 }
 
---- Resolve a variable by name.
+--- Resolve a variable by name.  Empty strings are treated as missing.
 --- When with_env is true, variables (if non-nil) is tried first, then
 --- os.getenv. Passing variables=nil with with_env=true is the FROM_ENV case.
 --- @param name string Variable name
@@ -61,11 +70,12 @@ local function resolve(name, variables, with_env)
     else
         v = variables and variables[name]
     end
-    return (type(v) == 'string') and v or nil
+    return (type(v) == 'string') and #v > 0 and v or nil
 end
 
 --- Resolve all $(VAR...) expressions in a string (single-pass).
---- Returns (resolved_string, nil) on success or (nil, errmsg) on failure.
+--- Returns (resolved_string, nil) on success, or (nil, errmsg) on failure.
+--- Returns nil (not empty string) when the final result is empty.
 --- @param s string Input string
 --- @param variables table rockspec.variables
 --- @return string|nil, string|nil
@@ -111,35 +121,67 @@ local function resolve_str(s, variables)
     if errmsg then
         return nil, errmsg
     end
-    return result
+    return #result > 0 and result or nil
 end
 
---- Recursively resolve all string values in a table in-place (single-pass).
---- Returns (true, nil) on success or (nil, errmsg) on failure.
---- @param tbl table Table to process
+--- Build a new table with all string values resolved (single-pass).
+--- Array elements that resolve to nil are dropped (dense rebuild).
+--- Map keys that resolve to nil are omitted.
+--- Empty child tables ({}) are preserved.
+--- Returns (new_table, nil) on success or (nil, errmsg) on failure.
+--- @param tbl table Input table
 --- @param variables table rockspec.variables
---- @return boolean|nil, string|nil
-local function resolve_tbl(tbl, variables)
-    for k, v in pairs(tbl) do
+--- @return table|nil, string|nil
+local function rebuild_tbl(tbl, variables)
+    local result = {}
+
+    -- Process the sequence portion (integer keys 1..n) first,
+    -- recording visited keys to skip them in the map pass.
+    local dedup = {}
+    for i, v in ipairs(tbl) do
+        dedup[i] = true
+        local resolved, err
         if type(v) == 'string' then
-            local resolved, err = resolve_str(v, variables)
+            resolved, err = resolve_str(v, variables)
+        elseif type(v) == 'table' then
+            resolved, err = rebuild_tbl(v, variables)
+        else
+            resolved = v
+        end
+
+        if err then
+            return nil, err
+        elseif resolved ~= nil then
+            result[#result + 1] = resolved
+        end
+    end
+
+    -- Process the map portion, skipping keys already handled above.
+    for k, v in pairs(tbl) do
+        if not dedup[k] then
+            local resolved, err
+            if type(v) == 'string' then
+                resolved, err = resolve_str(v, variables)
+            elseif type(v) == 'table' then
+                resolved, err = rebuild_tbl(v, variables)
+            else
+                resolved = v
+            end
+
             if err then
                 return nil, err
-            end
-            tbl[k] = resolved
-        elseif type(v) == 'table' then
-            local ok, err = resolve_tbl(v, variables)
-            if not ok then
-                return nil, err
+            elseif resolved ~= nil then
+                result[k] = resolved
             end
         end
     end
-    return true
+
+    return result
 end
 
 --- Resolve all $(VAR...) expressions in a string or table.
---- For a string: returns (resolved_string, nil) on success.
---- For a table: resolves all string values in-place and returns (table, nil).
+--- For a string: returns (resolved_string, nil) on success, nil if result is empty.
+--- For a table:  returns (new_table, nil) — never modifies the input table.
 --- Returns (nil, errmsg) on failure.
 --- @param target string|table Input string or table to process
 --- @param variables table rockspec.variables
@@ -149,11 +191,7 @@ local function resvars(target, variables)
     if type(target) == 'string' then
         return resolve_str(target, variables)
     elseif type(target) == 'table' then
-        local ok, err = resolve_tbl(target, variables)
-        if not ok then
-            return nil, err
-        end
-        return target
+        return rebuild_tbl(target, variables)
     else
         return nil, 'resvars: expected string or table, got ' .. type(target)
     end
