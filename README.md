@@ -141,6 +141,44 @@ f:close()
 ```
 
 
+## Variable Syntax
+
+Built-in hooks and the module fields resolve pass use a shared variable substitution syntax. All `$(...)` expressions in hook-processed strings are interpreted as follows:
+
+| Syntax | Description |
+|--------|-------------|
+| `$(VAR)` | **Required.** Replaced with `rockspec.variables.VAR`. Raises an error if the variable is missing or empty. |
+| `$(VAR)?` | **Optional.** Replaced with the value of `rockspec.variables.VAR`, or treated as missing when the variable is absent or empty. |
+| `$(VAR\|env)` | **Required (with env fallback).** Tries `rockspec.variables.VAR` first; falls back to `os.getenv("VAR")`. |
+| `$(VAR:env)` | **Required (env only).** Uses `os.getenv("VAR")` exclusively. |
+| `$(VAR\|env)?` | Optional version of `$(VAR\|env)`. |
+| `$(VAR:env)?` | Optional version of `$(VAR:env)`. |
+
+**Rules:**
+
+- An empty string in `rockspec.variables` or the environment is treated as missing.
+- Variable names must be LuaRocks-compatible identifiers: starting with a letter and containing only letters, digits, and underscores. Expressions containing hyphens or other non-identifier characters (e.g. `$(LIBPCRE2-8_LIB)`) are left unchanged by the resolver itself. The `$(pkgconfig)` hook normalizes such raw references in `build.modules` fields to their identifier-safe form (e.g. `$(LIBPCRE2_8_LIB)`) during its own processing, so they are resolvable in the module fields resolve pass that follows.
+- Substitution is **single-pass**: values from `rockspec.variables` are never re-expanded.
+- A string that resolves entirely to an empty result is treated as `nil`.
+- In table inputs, array elements that resolve to `nil` are dropped (the array is kept dense); map keys whose value resolves to `nil` are omitted.
+
+
+## Build Process
+
+The hooks backend executes in the following order:
+
+1. **`before_build` hooks** are run in the order listed.
+2. **Module fields resolve pass** — `$(VAR)` expressions are resolved in each `build.modules` entry:
+   - For a **string module path** (e.g. `["my.mod"] = "$(SRC)/mod.lua"`), the path is resolved. An error is raised if it resolves to nil or empty.
+   - For a **table module definition**, the following fields are resolved:
+     - `sources` — **required**: an error is raised if the field resolves to nil or an empty array.
+     - `incdirs`, `libdirs`, `libraries`, `defines` — **optional**: the field is removed when it resolves to nil or an empty array.
+3. **`builtin.run()`** is called to compile and install modules.
+4. **`after_build` hooks** are run in the order listed.
+
+This ordering means that `before_build` hooks (such as `$(pkgconfig)`) can populate variables in `rockspec.variables`, and those variables are then available when the module fields are resolved in step 2.
+
+
 ## Built-in Hooks
 
 Built-in hooks are predefined hooks that can be invoked using the `$(hook_name)` syntax in your `before_build` or `after_build` fields. These hooks provide common functionality without requiring you to write custom scripts.
@@ -187,12 +225,14 @@ build = {
             -- header: header filename(s) to locate. A string or an array of
             --         strings. All listed files must exist in the same
             --         directory. Used to discover and validate INCDIR.
+            --         Supports the $(VAR) variable syntax.
             header = "pcre2.h",           -- or { "pcre2.h", "pcre2posix.h" }
 
             -- library: library name(s) without the "lib" prefix. A string or
             --          an array of strings. All listed libraries must exist in
             --          the same directory. Used to discover and validate LIBDIR
             --          and to set the LIB variable.
+            --          Supports the $(VAR) variable syntax.
             library = "pcre2-8",          -- or { "pcre2-8", "pcre2-posix" }
         },
     },
@@ -506,11 +546,11 @@ are ignored by this hook, as they have no place to attach `configh = { ... }`.
 
 ### `$(VAR)` Resolution
 
-All string values inside `module.configh` (including nested tables) may contain `$(VAR)` placeholders. Before calling `configh.generate()`, the hook replaces them with the corresponding string values from `rockspec.variables`.
+All string values inside `module.configh` (including nested tables) may contain `$(VAR)` placeholders as described in [Variable Syntax](#variable-syntax). Before calling `configh.generate()`, the hook resolves them from `rockspec.variables` or the environment.
 
-Unknown variable names are left unchanged. Non-string values in `rockspec.variables` are also ignored.
+A required placeholder (`$(VAR)`) that cannot be resolved raises an error immediately. An optional placeholder (`$(VAR)?`) that cannot be resolved is treated as a missing value; the containing key is omitted from the table passed to `configh.generate()`.
 
-The original `module.configh` table is not rewritten during substitution; the hook works on a deep copy and only writes back `module.configh.report` after a successful run.
+The original `module.configh` table is never modified; the hook operates on a deep copy and writes only `module.configh.report` back after a successful run.
 
 ### `libs` Normalisation
 
