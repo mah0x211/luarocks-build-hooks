@@ -6,5 +6,6 @@ modules = {
     ["luarocks.build.hooks.configh"] = "lua/hooks/configh.lua",
     ["luarocks.build.hooks.extra-vars"] = "lua/hooks/extra-vars.lua",
     ["luarocks.build.hooks.pkgconfig"] = "lua/hooks/pkgconfig.lua",
+    ["luarocks.build.hooks.lib.pkginfo"] = "lua/lib/pkginfo.lua",
     ["luarocks.build.hooks.lib.resvars"] = "lua/lib/resvars.lua",
 }

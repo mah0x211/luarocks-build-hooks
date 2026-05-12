@@ -6,6 +6,7 @@ for _, test_file in ipairs({
     "test/extra-vars_test.lua",
     "test/pkgconfig_test.lua",
     "test/configh_test.lua",
+    "test/pkginfo_test.lua",
 }) do
     print("Running " .. test_file .. "...")
     print("--------------------")
