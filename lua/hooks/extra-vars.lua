@@ -20,33 +20,33 @@
 -- THE SOFTWARE.
 --
 local concat = table.concat
-local util = require("luarocks.util")
-local resvars = require("luarocks.build.hooks.lib.resvars")
+local util = require('luarocks.util')
+local resvars = require('luarocks.build.hooks.lib.resvars')
 
 --- Validate and normalize variable values
 --- @param value any variable value
 --- @return string? normalized variable value or nil if invalid
 --- @return any err message if invalid
 local function validate_value(value)
-    if type(value) == "string" then
+    if type(value) == 'string' then
         -- remove leading and trailing whitespace if it's a string
-        value = value:match("^%s*(.-)%s*$")
+        value = value:match('^%s*(.-)%s*$')
         return value
     end
 
-    if type(value) == "table" then
+    if type(value) == 'table' then
         local arr = {}
         local nvalues = #value
         local count = 0
         -- confirm it's an array of strings
         for k, v in pairs(value) do
             count = count + 1
-            if count > nvalues or type(v) ~= "string" then
-                return nil, ("variable-value#%s must be a string"):format(
+            if count > nvalues or type(v) ~= 'string' then
+                return nil, ('variable-value#%s must be a string'):format(
                            tostring(k))
             end
             -- remove leading and trailing whitespace
-            v = v:match("^%s*(.-)%s*$")
+            v = v:match('^%s*(.-)%s*$')
             if #v > 0 then
                 -- only add non-empty strings
                 arr[#arr + 1] = v
@@ -57,7 +57,7 @@ local function validate_value(value)
     end
 
     -- invalid value type
-    return nil, "variable-value must be a string or an array of strings"
+    return nil, 'variable-value must be a string or an array of strings'
 end
 
 --- Get existing variable value
@@ -66,13 +66,13 @@ end
 --- @return string? var existing value or nil if not found
 local function get_variables(variables, name)
     local var = variables[name] or ''
-    if type(var) ~= "string" then
+    if type(var) ~= 'string' then
         -- not a string
         return
     end
 
     -- remove leading and trailing whitespace
-    var = var:match("^%s*(.-)%s*$")
+    var = var:match('^%s*(.-)%s*$')
     if #var > 0 then
         return var
     end
@@ -85,8 +85,8 @@ end
 local function append_vars(variables, extvars, target)
     for name, value in pairs(extvars) do
         -- validate name
-        if type(name) ~= "string" then
-            error(("  %s[%q] variable-name must be a string"):format(target,
+        if type(name) ~= 'string' then
+            error(('  %s[%q] variable-name must be a string'):format(target,
                                                                      tostring(
                                                                          name)))
         end
@@ -95,28 +95,28 @@ local function append_vars(variables, extvars, target)
         local err
         value, err = validate_value(value)
         if err then
-            error(("  %s[%q] " .. err):format(target, tostring(name)))
+            error(('  %s[%q] ' .. err):format(target, tostring(name)))
         end
 
         -- resolve variable expressions in value
         value, err = resvars(value, variables)
         if err then
-            error(("  %s[%q] %s"):format(target, tostring(name), err))
+            error(('  %s[%q] %s'):format(target, tostring(name), err))
         end
 
         -- get existing variable
         local var = get_variables(variables, name)
         if not var then
             util.printout(
-                ("  skipping %s: %s.%s is not a string or empty"):format(name,
+                ('  skipping %s: %s.%s is not a string or empty'):format(name,
                                                                          target,
                                                                          name))
         elseif not value then
             -- skip empty value
-            util.printout(("  skipping %s: extra value is empty"):format(name))
+            util.printout(('  skipping %s: extra value is empty'):format(name))
         else
             -- append extra variables
-            util.printout(("  append %s values %q to existing value %q"):format(
+            util.printout(('  append %s values %q to existing value %q'):format(
                               name, value, var))
             var = var .. ' ' .. value
             variables[name] = var
@@ -136,39 +136,39 @@ local function append_extra_vars(rockspec)
     -- 1. Process extra_variables
     local extra_vars = rockspec.build.extra_variables
     if extra_vars then
-        if type(extra_vars) ~= "table" then
-            error("hooks.extra-vars: build.extra_variables should be a table.")
+        if type(extra_vars) ~= 'table' then
+            error('hooks.extra-vars: build.extra_variables should be a table.')
         end
-        util.printout("hooks.extra-vars: adding extra_variables...")
-        append_vars(rockspec.variables, extra_vars, "build.extra_variables")
+        util.printout('hooks.extra-vars: adding extra_variables...')
+        append_vars(rockspec.variables, extra_vars, 'build.extra_variables')
     end
 
     -- 2. Process conditional_variables
     local cond_vars = rockspec.build.conditional_variables
     if not cond_vars then
         return
-    elseif type(cond_vars) ~= "table" then
-        error("hooks.extra-vars: build.conditional_variables should be a table.")
+    elseif type(cond_vars) ~= 'table' then
+        error('hooks.extra-vars: build.conditional_variables should be a table.')
     end
-    util.printout("hooks.extra-vars: processing conditional_variables...")
+    util.printout('hooks.extra-vars: processing conditional_variables...')
 
     -- Iterate over conditional_variables
     for flag, variables in pairs(cond_vars) do
-        if type(flag) ~= "string" then
+        if type(flag) ~= 'string' then
             error(
-                "hooks.extra-vars: conditional_variables flag name must be a string")
-        elseif type(variables) ~= "table" then
+                'hooks.extra-vars: conditional_variables flag name must be a string')
+        elseif type(variables) ~= 'table' then
             error(
-                ("hooks.extra-vars: conditional_variables[%q] must be a table"):format(
+                ('hooks.extra-vars: conditional_variables[%q] must be a table'):format(
                     flag))
         end
 
         -- Check if the flag is enabled in rockspec.variables
         if ENABLED_VALUES[os.getenv(flag)] then
             util.printout(
-                ("  [%s] enabled: appending variables..."):format(flag))
+                ('  [%s] enabled: appending variables...'):format(flag))
             append_vars(rockspec.variables, variables,
-                        ("build.conditional_variables[%q]"):format(flag))
+                        ('build.conditional_variables[%q]'):format(flag))
         end
     end
 end

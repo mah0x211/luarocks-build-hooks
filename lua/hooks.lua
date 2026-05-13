@@ -21,11 +21,11 @@
 --
 local concat = table.concat
 local unpack = unpack or table.unpack
-local builtin = require("luarocks.build.builtin")
-local fs = require("luarocks.fs")
-local util = require("luarocks.util")
-local chdir = require("luarocks.build.hooks.chdir")
-local resvars = require("luarocks.build.hooks.lib.resvars")
+local builtin = require('luarocks.build.builtin')
+local fs = require('luarocks.fs')
+local util = require('luarocks.util')
+local chdir = require('luarocks.build.hooks.chdir')
+local resvars = require('luarocks.build.hooks.lib.resvars')
 
 local function resolve_value(value, variables)
     if type(value) == 'string' then
@@ -62,11 +62,11 @@ local function resolve_mod_fields(mname, mod, variables)
             local v, err = resolve_value(mod[field], variables)
             if err then
                 return nil,
-                       ("build.modules[%q].%s %s"):format(mname, field, err)
+                       ('build.modules[%q].%s %s'):format(mname, field, err)
             elseif not v or (type(v) == 'table' and #v == 0) then
                 if required then
                     return nil,
-                           ("build.modules[%q].%s resolved to empty string"):format(
+                           ('build.modules[%q].%s resolved to empty string'):format(
                                mname, field)
                 end
                 v = nil
@@ -88,8 +88,8 @@ local function resolve_modvars(rockspec)
         if type(mod) == 'string' then
             local v, err = resolve_value(mod, variables)
             if not v then
-                return nil, ("build.modules[%q] %s"):format(mname, err or
-                                                                "path resolved to empty string")
+                err = err or 'path resolved to empty string'
+                return nil, ('build.modules[%q] %s'):format(mname, err)
             end
             modules[mname] = v
         elseif type(mod) == 'table' then
@@ -117,7 +117,7 @@ local function copy_table(tbl, visited)
     local t2 = {}
     visited[tbl] = t2
     for k, v in pairs(tbl) do
-        if type(v) == "table" then
+        if type(v) == 'table' then
             v = copy_table(v, visited)
         end
         t2[k] = v
@@ -184,7 +184,7 @@ end
 local function load_hook(pathname)
     -- Load as file
     if not fs.exists(pathname) then
-        return nil, ("%q hook script not found"):format(pathname)
+        return nil, ('%q hook script not found'):format(pathname)
     end
 
     local env = getenv()
@@ -195,11 +195,11 @@ local function load_hook(pathname)
             _G.setfenv(chunk, env)
         end
     else
-        chunk, err = loadfile(pathname, "bt", env)
+        chunk, err = loadfile(pathname, 'bt', env)
     end
 
     if err then
-        return nil, ("Failed to load hook script %q: %s"):format(pathname, err)
+        return nil, ('Failed to load hook script %q: %s'):format(pathname, err)
     end
     return chunk
 end
@@ -209,22 +209,22 @@ end
 --- @return function? fn The loaded module, or nil on failure.
 --- @return any err An error message on failure.
 local function load_builtin_hook(pathname)
-    local whole, name = pathname:match("^(%s*%$%(([^)%s]*))")
+    local whole, name = pathname:match('^(%s*%$%(([^)%s]*))')
     if not whole then
         -- Not a builtin hook attempt
         return
-    elseif not pathname:find("^%)%s*$", #whole + 1) then
-        return nil, "Invalid builtin hook syntax"
+    elseif not pathname:find('^%)%s*$', #whole + 1) then
+        return nil, 'Invalid builtin hook syntax'
     elseif #name == 0 then
-        return nil, "Invalid builtin hook syntax: missing name"
+        return nil, 'Invalid builtin hook syntax: missing name'
     end
 
     -- Load hook as submodule via require
-    local ok, mod = pcall(require, "luarocks.build.hooks." .. name)
+    local ok, mod = pcall(require, 'luarocks.build.hooks.' .. name)
     if not ok then
-        return nil, ("Failed to load builtin-hook %s: %s"):format(name, mod)
-    elseif type(mod) ~= "function" then
-        return nil, ("Invalid builtin-hook %s: not a function"):format(name)
+        return nil, ('Failed to load builtin-hook %s: %s'):format(name, mod)
+    elseif type(mod) ~= 'function' then
+        return nil, ('Invalid builtin-hook %s: not a function'):format(name)
     end
     return mod
 end
@@ -248,7 +248,7 @@ local function parse_hook(str)
         hook.args[#hook.args + 1] = match
     end
     -- Reconstruct original hook string
-    hook.value = concat(hook.args, " ")
+    hook.value = concat(hook.args, ' ')
     -- First argument is the hook pathname
     hook.pathname = table.remove(hook.args, 1)
 
@@ -282,7 +282,7 @@ local function parse_hooks(rockspec, name)
             build[name],
         }
     elseif hook_type ~= 'table' then
-        return nil, "Invalid hook type: " .. hook_type
+        return nil, ('Invalid hook type: %s'):format(hook_type)
     elseif #hooks == 0 then
         return {} -- no hooks
     else
@@ -292,26 +292,26 @@ local function parse_hooks(rockspec, name)
         local count = 0
         for _, v in pairs(hooks) do
             count = count + 1
-            if count > nhooks or type(v) ~= "string" then
-                return nil, ("%s must be an array of strings"):format(spec_key)
+            if count > nhooks or type(v) ~= 'string' then
+                return nil, ('%s must be an array of strings'):format(spec_key)
             end
         end
     end
 
     -- parse hooks
     for i, str in ipairs(hooks) do
-        local idx = is_array and ("#%d"):format(i) or ""
+        local idx = is_array and ('#%d'):format(i) or ''
         local t = type(str)
         if t ~= 'string' then
-            return nil, ("%s%s must be a string: %s"):format(spec_key, idx, t)
+            return nil, ('%s%s must be a string: %s'):format(spec_key, idx, t)
         end
 
         -- parse hook string
         local hook, err = parse_hook(str)
         if err then
-            return nil, ("%s%s: %s"):format(spec_key, idx, err)
+            return nil, ('%s%s: %s'):format(spec_key, idx, err)
         end
-        hook.spec_name = ("%s%s"):format(spec_key, idx)
+        hook.spec_name = ('%s%s'):format(spec_key, idx)
         hooks[i] = hook
     end
 
@@ -328,11 +328,11 @@ local function run_hooks(rockspec, no_install)
     local before_hooks, after_hooks, err
 
     -- Parse before_build hooks
-    before_hooks, err = parse_hooks(rockspec, "before_build")
+    before_hooks, err = parse_hooks(rockspec, 'before_build')
     if not before_hooks then
         return nil, err
     end
-    after_hooks, err = parse_hooks(rockspec, "after_build")
+    after_hooks, err = parse_hooks(rockspec, 'after_build')
     if not after_hooks then
         return nil, err
     end
@@ -340,10 +340,10 @@ local function run_hooks(rockspec, no_install)
     -- 1. Run before_build if present
     local ok
     for _, hook in ipairs(before_hooks) do
-        util.printout("Running hook: " .. hook.value)
+        util.printout('Running hook: ' .. hook.value)
         ok, err = run_hook(hook, rockspec)
         if not ok then
-            return false, ("Failed to run %q: %s"):format(hook.spec_name, err)
+            return false, ('Failed to run %q: %s'):format(hook.spec_name, err)
         end
     end
 
@@ -361,10 +361,10 @@ local function run_hooks(rockspec, no_install)
 
     -- 4. Run after_build if present
     for _, hook in ipairs(after_hooks) do
-        util.printout("Running hook: " .. hook.value)
+        util.printout('Running hook: ' .. hook.value)
         ok, err = run_hook(hook, rockspec)
         if not ok then
-            return false, ("Failed to run %q: %s"):format(hook.spec_name, err)
+            return false, ('Failed to run %q: %s'):format(hook.spec_name, err)
         end
     end
 
@@ -373,14 +373,14 @@ end
 
 local function run(rockspec, no_install)
     local target_dir = fs and fs.current_dir and fs.current_dir() or '.'
-    util.printout("Changing working directory to " .. target_dir)
+    util.printout(('Changing working directory to %s'):format(target_dir))
 
     local cwd = assert(chdir(target_dir))
     local ok, res, err = pcall(function()
         return run_hooks(rockspec, no_install)
     end)
 
-    util.printout("Restoring working directory to " .. cwd)
+    util.printout(('Restoring working directory to %s'):format(cwd))
     assert(chdir(cwd))
 
     if not ok then
