@@ -21,6 +21,7 @@ build = {
     type = "builtin",
     modules = {
         ["luarocks.build.hooks"] = "lua/hooks.lua",
+        ["luarocks.build.hooks.lib.incdirs"] = "lua/lib/incdirs.lua",
         ["luarocks.build.hooks.lib.pkginfo"] = "lua/lib/pkginfo.lua",
         ["luarocks.build.hooks.lib.resvars"] = "lua/lib/resvars.lua",
         ["luarocks.build.hooks.extra-vars"] = "lua/hooks/extra-vars.lua",
