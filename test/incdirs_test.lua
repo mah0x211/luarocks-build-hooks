@@ -17,7 +17,8 @@ package.loaded["luarocks.build.hooks.lib.pkginfo"] = function(pkgname,
     return mock_pkginfo.result, mock_pkginfo.err
 end
 
--- Load module under test
+-- Load module under test (clear cache so mocks take effect)
+package.loaded["luarocks.build.hooks.lib.incdirs"] = nil
 local incdirs = require("luarocks.build.hooks.lib.incdirs")
 
 -- Test helpers

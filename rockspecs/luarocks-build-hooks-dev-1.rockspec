@@ -16,6 +16,7 @@ It also includes a hook to resolve external dependencies using pkg-config.
 dependencies = {
     "lua >= 5.1",
     "configh >= 0.4.0",
+    "dump >= 0.1.3",
 }
 build = {
     type = "builtin",

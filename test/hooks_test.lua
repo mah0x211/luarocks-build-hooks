@@ -53,6 +53,32 @@ local mock_util = {
 }
 mock("luarocks.util", mock_util)
 
+-- Mock dump module
+mock("dump", function(tbl)
+    local parts = {}
+    for k, v in pairs(tbl or {}) do
+        parts[#parts + 1] = tostring(k) .. "=" .. tostring(v)
+    end
+    return "{" .. table.concat(parts, ", ") .. "}"
+end)
+
+-- Mock incdirs module
+local mock_incdirs = {}
+mock_incdirs.reset = function()
+    for k in pairs(mock_incdirs) do
+        if type(k) == 'string' and k ~= "reset" then
+            mock_incdirs[k] = nil
+        end
+    end
+end
+mock("luarocks.build.hooks.lib.incdirs", function(pkgname, constraints)
+    local entry = mock_incdirs[pkgname]
+    if entry then
+        return entry.result, entry.err
+    end
+    return nil, nil
+end)
+
 -- Load module under test
 local builtin_hook = require("luarocks.build.hooks")
 
@@ -88,6 +114,7 @@ local function run_test(name, func)
     io.write("Running " .. name .. "... ")
     mock_builtin:reset()
     mock_fs:reset()
+    mock_incdirs.reset()
     mock_chunk_func = nil
     mock_env_captured = nil
     local status, err = xpcall(func, debug.traceback)
@@ -116,6 +143,18 @@ local function assert_equal(expected, actual, msg)
     if expected ~= actual then
         error((msg or "") .. " Expected " .. tostring(expected) .. ", got " ..
                   tostring(actual))
+    end
+end
+
+local function assert_nil(val, msg)
+    if val ~= nil then
+        error((msg or "") .. " Expected nil, got " .. tostring(val))
+    end
+end
+
+local function assert_not_nil(val, msg)
+    if val == nil then
+        error((msg or "") .. " Expected non-nil value")
     end
 end
 
@@ -930,3 +969,557 @@ run_test(
     end)
 
 print("All tests passed!")
+
+-- ============================================================
+-- add_deps_incdirs: dependency incdirs added to C modules
+-- ============================================================
+
+run_test("add_deps_incdirs: no dependencies → no modification", function()
+    local rockspec = {
+        build = {
+            modules = {
+                mymod = "src/mymod.c",
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_nil(rockspec.build.modules.mymod.incdirs,
+               "No incdirs should be added without dependencies")
+end)
+
+run_test("add_deps_incdirs: dependency with incdirs → added to C module",
+         function()
+    mock_incdirs["libfoo"] = {
+        result = {
+            headers = {
+                "foo.h",
+            },
+            incdirs = {
+                "/usr/include/foo",
+            },
+        },
+    }
+    local rockspec = {
+        dependencies = {
+            {
+                name = "libfoo",
+                constraints = {},
+            },
+        },
+        build = {
+            modules = {
+                mymod = "src/mymod.c",
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_not_nil(rockspec.build.modules.mymod.incdirs)
+    assert_equal("/usr/include/foo", rockspec.build.modules.mymod.incdirs[1])
+end)
+
+run_test("add_deps_incdirs: dependency error → warning, build continues",
+         function()
+    mock_incdirs["libfoo"] = {
+        err = "manifest not found",
+    }
+    local rockspec = {
+        dependencies = {
+            {
+                name = "libfoo",
+                constraints = {},
+            },
+        },
+        build = {
+            modules = {
+                mymod = "src/mymod.c",
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed despite warning: " .. tostring(err))
+    assert_nil(rockspec.build.modules.mymod.incdirs)
+end)
+
+run_test("add_deps_incdirs: multiple dependencies → incdirs combined",
+         function()
+    mock_incdirs["libfoo"] = {
+        result = {
+            headers = {
+                "foo.h",
+            },
+            incdirs = {
+                "/usr/include/foo",
+            },
+        },
+    }
+    mock_incdirs["libbar"] = {
+        result = {
+            headers = {
+                "bar.h",
+            },
+            incdirs = {
+                "/usr/include/bar",
+            },
+        },
+    }
+    local rockspec = {
+        dependencies = {
+            {
+                name = "libfoo",
+                constraints = {},
+            },
+            {
+                name = "libbar",
+                constraints = {},
+            },
+        },
+        build = {
+            modules = {
+                mymod = "src/mymod.c",
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_equal(2, #rockspec.build.modules.mymod.incdirs)
+    assert_equal("/usr/include/foo", rockspec.build.modules.mymod.incdirs[1])
+    assert_equal("/usr/include/bar", rockspec.build.modules.mymod.incdirs[2])
+end)
+
+run_test("add_deps_incdirs: Lua modules are not modified", function()
+    mock_incdirs["libfoo"] = {
+        result = {
+            headers = {
+                "foo.h",
+            },
+            incdirs = {
+                "/usr/include/foo",
+            },
+        },
+    }
+    local rockspec = {
+        dependencies = {
+            {
+                name = "libfoo",
+                constraints = {},
+            },
+        },
+        build = {
+            modules = {
+                mymod = "src/mymod.lua",
+                other = "src/other",
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_nil(rockspec.build.modules.mymod.incdirs,
+               "Lua module should not get incdirs")
+    assert_nil(rockspec.build.modules.other.incdirs,
+               "Extensionless module should not get incdirs")
+end)
+
+run_test("add_deps_incdirs: table C module with string sources", function()
+    mock_incdirs["libfoo"] = {
+        result = {
+            headers = {
+                "foo.h",
+            },
+            incdirs = {
+                "/usr/include/foo",
+            },
+        },
+    }
+    local rockspec = {
+        dependencies = {
+            {
+                name = "libfoo",
+                constraints = {},
+            },
+        },
+        build = {
+            modules = {
+                mymod = {
+                    sources = "src/mymod.c",
+                },
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_equal("/usr/include/foo", rockspec.build.modules.mymod.incdirs[1])
+    assert_equal("table", type(rockspec.build.modules.mymod.sources),
+                 "String sources should be converted to array")
+    assert_equal("src/mymod.c", rockspec.build.modules.mymod.sources[1])
+end)
+
+run_test("add_deps_incdirs: table with array sources containing .c", function()
+    mock_incdirs["libfoo"] = {
+        result = {
+            headers = {
+                "foo.h",
+            },
+            incdirs = {
+                "/usr/include/foo",
+            },
+        },
+    }
+    local rockspec = {
+        dependencies = {
+            {
+                name = "libfoo",
+                constraints = {},
+            },
+        },
+        build = {
+            modules = {
+                mymod = {
+                    sources = {
+                        "src/mymod.c",
+                        "src/helper.c",
+                    },
+                },
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_equal("/usr/include/foo", rockspec.build.modules.mymod.incdirs[1])
+end)
+
+run_test(
+    "add_deps_incdirs: table with array sources not containing .c → skipped",
+    function()
+        mock_incdirs["libfoo"] = {
+            result = {
+                headers = {
+                    "foo.h",
+                },
+                incdirs = {
+                    "/usr/include/foo",
+                },
+            },
+        }
+        local rockspec = {
+            dependencies = {
+                {
+                    name = "libfoo",
+                    constraints = {},
+                },
+            },
+            build = {
+                modules = {
+                    mymod = {
+                        sources = {
+                            "src/mymod.lua",
+                        },
+                    },
+                },
+            },
+        }
+        local ok, err = builtin_hook.run(rockspec)
+        assert_true(ok, "Should succeed: " .. tostring(err))
+        assert_nil(rockspec.build.modules.mymod.incdirs,
+                   "Non-C table module should not get incdirs")
+    end)
+
+run_test("add_deps_incdirs: existing incdirs on module → merged with dedup",
+         function()
+    mock_incdirs["libfoo"] = {
+        result = {
+            headers = {
+                "foo.h",
+            },
+            incdirs = {
+                "/usr/include/foo",
+                "/usr/include/common",
+            },
+        },
+    }
+    local rockspec = {
+        dependencies = {
+            {
+                name = "libfoo",
+                constraints = {},
+            },
+        },
+        build = {
+            modules = {
+                mymod = {
+                    sources = {
+                        "src/mymod.c",
+                    },
+                    incdirs = {
+                        "/usr/include/common",
+                        "/custom",
+                    },
+                },
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_equal(3, #rockspec.build.modules.mymod.incdirs)
+    assert_equal("/usr/include/common", rockspec.build.modules.mymod.incdirs[1])
+    assert_equal("/custom", rockspec.build.modules.mymod.incdirs[2])
+    assert_equal("/usr/include/foo", rockspec.build.modules.mymod.incdirs[3])
+end)
+
+run_test("add_deps_incdirs: string incdirs on module → converted and merged",
+         function()
+    mock_incdirs["libfoo"] = {
+        result = {
+            headers = {
+                "foo.h",
+            },
+            incdirs = {
+                "/usr/include/foo",
+            },
+        },
+    }
+    local rockspec = {
+        dependencies = {
+            {
+                name = "libfoo",
+                constraints = {},
+            },
+        },
+        build = {
+            modules = {
+                mymod = {
+                    sources = {
+                        "src/mymod.c",
+                    },
+                    incdirs = "/custom",
+                },
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_equal("table", type(rockspec.build.modules.mymod.incdirs))
+    assert_equal(2, #rockspec.build.modules.mymod.incdirs)
+    assert_equal("/custom", rockspec.build.modules.mymod.incdirs[1])
+    assert_equal("/usr/include/foo", rockspec.build.modules.mymod.incdirs[2])
+end)
+
+run_test("add_deps_incdirs: invalid type incdirs on module → not modified",
+         function()
+    mock_incdirs["libfoo"] = {
+        result = {
+            headers = {
+                "foo.h",
+            },
+            incdirs = {
+                "/usr/include/foo",
+            },
+        },
+    }
+    local rockspec = {
+        dependencies = {
+            {
+                name = "libfoo",
+                constraints = {},
+            },
+        },
+        build = {
+            modules = {
+                mymod = {
+                    sources = {
+                        "src/mymod.c",
+                    },
+                    incdirs = 123,
+                },
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_equal(123, rockspec.build.modules.mymod.incdirs,
+                 "Invalid incdirs should not be modified")
+end)
+
+run_test("add_deps_incdirs: multiple C modules → all get incdirs", function()
+    mock_incdirs["libfoo"] = {
+        result = {
+            headers = {
+                "foo.h",
+            },
+            incdirs = {
+                "/usr/include/foo",
+            },
+        },
+    }
+    local rockspec = {
+        dependencies = {
+            {
+                name = "libfoo",
+                constraints = {},
+            },
+        },
+        build = {
+            modules = {
+                mod1 = "src/mod1.c",
+                mod2 = "src/mod2.c",
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_equal("/usr/include/foo", rockspec.build.modules.mod1.incdirs[1])
+    assert_equal("/usr/include/foo", rockspec.build.modules.mod2.incdirs[1])
+end)
+
+run_test("add_deps_incdirs: no C modules → no modification", function()
+    mock_incdirs["libfoo"] = {
+        result = {
+            headers = {
+                "foo.h",
+            },
+            incdirs = {
+                "/usr/include/foo",
+            },
+        },
+    }
+    local rockspec = {
+        dependencies = {
+            {
+                name = "libfoo",
+                constraints = {},
+            },
+        },
+        build = {
+            modules = {
+                mymod = "src/mymod.lua",
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_nil(rockspec.build.modules.mymod.incdirs)
+end)
+
+run_test("add_deps_incdirs: nil extra_incdirs → module not modified",
+         function()
+    -- dep has no incdirs (returns nil, nil)
+    mock_incdirs["libfoo"] = {
+        result = nil,
+        err = nil,
+    }
+    local rockspec = {
+        dependencies = {
+            {
+                name = "libfoo",
+                constraints = {},
+            },
+        },
+        build = {
+            modules = {
+                mymod = "src/mymod.c",
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_nil(rockspec.build.modules.mymod.incdirs)
+end)
+
+run_test("add_deps_incdirs: table module with no sources → skipped",
+         function()
+    mock_incdirs["libfoo"] = {
+        result = {
+            headers = {
+                "foo.h",
+            },
+            incdirs = {
+                "/usr/include/foo",
+            },
+        },
+    }
+    local rockspec = {
+        dependencies = {
+            {
+                name = "libfoo",
+                constraints = {},
+            },
+        },
+        build = {
+            modules = {
+                mymod = {
+                    libraries = "foo",
+                },
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_nil(rockspec.build.modules.mymod.incdirs,
+               "Module without sources should not get incdirs")
+end)
+
+run_test(
+    "add_deps_incdirs: table with string sources not ending in .c → skipped",
+    function()
+        mock_incdirs["libfoo"] = {
+            result = {
+                headers = {
+                    "foo.h",
+                },
+                incdirs = {
+                    "/usr/include/foo",
+                },
+            },
+        }
+        local rockspec = {
+            dependencies = {
+                {
+                    name = "libfoo",
+                    constraints = {},
+                },
+            },
+            build = {
+                modules = {
+                    mymod = {
+                        sources = "src/mymod.lua",
+                    },
+                },
+            },
+        }
+        local ok, err = builtin_hook.run(rockspec)
+        assert_true(ok, "Should succeed: " .. tostring(err))
+        assert_nil(rockspec.build.modules.mymod.incdirs,
+                   "Table module with non-.c string sources should not get incdirs")
+    end)
+
+run_test("add_deps_incdirs: non-string non-table module value → skipped",
+         function()
+    mock_incdirs["libfoo"] = {
+        result = {
+            headers = {
+                "foo.h",
+            },
+            incdirs = {
+                "/usr/include/foo",
+            },
+        },
+    }
+    local rockspec = {
+        dependencies = {
+            {
+                name = "libfoo",
+                constraints = {},
+            },
+        },
+        build = {
+            modules = {
+                mymod = 123,
+            },
+        },
+    }
+    local ok, err = builtin_hook.run(rockspec)
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_equal(123, rockspec.build.modules.mymod,
+                 "Numeric module value should not be modified")
+end)

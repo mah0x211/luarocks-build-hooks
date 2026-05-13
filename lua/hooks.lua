@@ -21,11 +21,13 @@
 --
 local concat = table.concat
 local unpack = unpack or table.unpack
+local dump = require('dump')
 local builtin = require('luarocks.build.builtin')
 local fs = require('luarocks.fs')
 local util = require('luarocks.util')
 local chdir = require('luarocks.build.hooks.chdir')
 local resvars = require('luarocks.build.hooks.lib.resvars')
+local get_pkg_incdirs = require('luarocks.build.hooks.lib.incdirs')
 
 local function resolve_value(value, variables)
     if type(value) == 'string' then
@@ -371,12 +373,162 @@ local function run_hooks(rockspec, no_install)
     return true
 end
 
+--- Append include directories from dependencies to a module's incdirs field.
+--- @param mod table The module to modify.
+--- @param extra_incdirs string[]? The include directories to append.
+--- @return boolean ok true if the module was modified.
+local function append_extra_incdirs(mod, extra_incdirs)
+    if extra_incdirs == nil then
+        -- no extra incdirs to add, skip modification
+        return false
+    end
+    assert(type(extra_incdirs) == 'table')
+
+    local incdirs = mod.incdirs
+
+    -- no existing incdirs, set to incdirs from dependencies
+    if incdirs == nil then
+        mod.incdirs = extra_incdirs
+        return true
+    end
+
+    -- convert incdirs field to array if it's a string
+    if type(incdirs) == 'string' then
+        -- convert to array
+        incdirs = {
+            incdirs,
+        }
+    elseif type(incdirs) ~= 'table' then
+        -- invalid incdirs type, skip modification
+        return false
+    end
+
+    -- list of existing incdirs for deduplication
+    local nodup = {}
+    for _, dir in ipairs(incdirs) do
+        nodup[dir] = true
+    end
+
+    -- append extra incdirs, skipping duplicates
+    for _, dir in ipairs(extra_incdirs) do
+        if not nodup[dir] then
+            nodup[dir] = true
+            incdirs[#incdirs + 1] = dir
+        end
+    end
+    -- update mod.incdirs with the combined list
+    mod.incdirs = incdirs
+    return true
+end
+
+--- Get include directories from dependencies of the rockspec.
+--- @param rockspec table The rockspec to analyze.
+--- @return string[]? A list of include directories from dependencies
+--- @return table? A table mapping dependency package names to their include directories, for debugging purposes.
+local function get_deps_incdirs(rockspec)
+    local packages = {}
+    local incdirs = {}
+    for _, dep in ipairs(rockspec.dependencies or {}) do
+        local pkg_incdirs, err = get_pkg_incdirs(dep.name, dep.constraints)
+        if pkg_incdirs then
+            -- Add include directories from this dependency to the list
+            for _, dir in ipairs(pkg_incdirs.incdirs) do
+                incdirs[#incdirs + 1] = dir
+            end
+            -- Also add to packages list for debugging purposes
+            packages[dep.name] = pkg_incdirs
+        elseif err then
+            util.printout(
+                ('Warning: Failed to get include directories for dependency %q: %s'):format(
+                    dep.name, err))
+        end
+    end
+
+    if #incdirs > 0 then
+        return incdirs, packages
+    end
+end
+
+local function check_cmodule(mod)
+    if type(mod) == 'string' then
+        if mod:find('%.c$') then
+            -- found a C module, convert to table form for easier processing
+            return {
+                sources = {
+                    mod,
+                },
+            }
+        end
+    elseif type(mod) ~= 'table' then
+        -- invalid module type, skip
+        return
+    elseif type(mod.sources) == 'string' then
+        if mod.sources:find('%.c$') then
+            -- convert sources field to array if it's a string
+            mod.sources = {
+                mod.sources,
+            }
+            return mod
+        end
+    elseif type(mod.sources) == 'table' then
+        for _, src in ipairs(mod.sources) do
+            if type(src) == 'string' and src:find('%.c$') then
+                -- found a C source file, keep this module
+                return mod
+            end
+        end
+    end
+    -- not a C module, skip
+end
+
+--- Add include directories from dependencies to C modules in the rockspec.
+--- @param rockspec table The rockspec to modify.
+local function add_deps_incdirs(rockspec)
+    -- list all c modules
+    local modules = rockspec.build.modules
+    local get_deps_incdirs_once = false
+    local incdirs
+
+    for name, mod in pairs(modules or {}) do
+        mod = check_cmodule(mod)
+        if mod then
+            if not get_deps_incdirs_once then
+                -- Get include directories from dependencies only once, before
+                -- processing the first C module, since the same incdirs can be
+                -- applied to all C modules and there's no need to repeat this
+                -- potentially expensive operation for each C module.
+                get_deps_incdirs_once = true
+                local packages
+                incdirs, packages = get_deps_incdirs(rockspec)
+                if incdirs then
+                    util.printout(
+                        ('Add include directories from dependencies to C modules: %s'):format(
+                            dump(packages)))
+                end
+            end
+
+            if append_extra_incdirs(mod, incdirs) then
+                -- overwrite module in rockspec with updated incdirs field
+                modules[name] = mod
+            end
+        end
+        -- not a C module, skip
+    end
+end
+
 local function run(rockspec, no_install)
     local target_dir = fs and fs.current_dir and fs.current_dir() or '.'
     util.printout(('Changing working directory to %s'):format(target_dir))
 
     local cwd = assert(chdir(target_dir))
     local ok, res, err = pcall(function()
+        -- Add include directories from dependencies to C modules before running
+        -- hooks, so that hooks can rely on the presence of these incdirs in the
+        -- rockspec for any C modules when they run.
+        add_deps_incdirs(rockspec)
+
+        -- Delegate to run_hooks, which will run before_build hooks, then the
+        -- standard build process, then after_build hooks.
         return run_hooks(rockspec, no_install)
     end)
 
