@@ -22,6 +22,7 @@ build = {
     modules = {
         ["luarocks.build.hooks"] = "lua/hooks.lua",
         ["luarocks.build.hooks.lib.resvars"] = "lua/lib/resvars.lua",
+        ["luarocks.build.hooks.lib.resmodvars"] = "lua/lib/resmodvars.lua",
         ["luarocks.build.hooks.extra-vars"] = "lua/hooks/extra-vars.lua",
         ["luarocks.build.hooks.pkgconfig"] = "lua/hooks/pkgconfig.lua",
         ["luarocks.build.hooks.configh"] = "lua/hooks/configh.lua",

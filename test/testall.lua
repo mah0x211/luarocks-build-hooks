@@ -2,6 +2,7 @@ print("Running all tests...")
 print("====================")
 for _, test_file in ipairs({
     "test/resvars_test.lua",
+    "test/resmodvars_test.lua",
     "test/hooks_test.lua",
     "test/extra-vars_test.lua",
     "test/pkgconfig_test.lua",
