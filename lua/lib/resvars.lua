@@ -186,15 +186,16 @@ end
 --- @param target string|table Input string or table to process
 --- @param variables table rockspec.variables
 --- @return string|table|nil, string|nil
-local function resvars(target, variables)
+local function resolve_vars(target, variables)
     variables = variables or {}
     if type(target) == 'string' then
         return resolve_str(target, variables)
     elseif type(target) == 'table' then
         return rebuild_tbl(target, variables)
     else
-        return nil, 'resvars: expected string or table, got ' .. type(target)
+        return nil,
+               'resolve_vars: expected string or table, got ' .. type(target)
     end
 end
 
-return resvars
+return resolve_vars
