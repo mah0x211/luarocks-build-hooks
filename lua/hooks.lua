@@ -278,6 +278,16 @@ local function run_hooks(rockspec, no_install)
         return nil, err
     end
 
+    -- Remove table-valued entries from rockspec.variables;
+    -- LuaRocks core assumes all variable values are strings.
+    local variables = {}
+    for k, v in pairs(rockspec.variables or {}) do
+        if type(v) ~= 'table' then
+            variables[k] = v
+        end
+    end
+    rockspec.variables = variables
+
     -- 3. Delegate to standard builtin backend
     ok, err = builtin.run(rockspec, no_install)
     if not ok then
