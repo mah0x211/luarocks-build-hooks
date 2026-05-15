@@ -1,9 +1,5 @@
 require("luacov")
 
--- Mock resvars dependency
-package.loaded["luarocks.build.hooks.lib.resvars"] = require(
-                                                         "luarocks.build.hooks.lib.resvars")
-
 -- Load module under test
 local resolve_modvars = require("luarocks.build.hooks.lib.resmodvars")
 
@@ -43,6 +39,29 @@ end
 local function assert_nil(val, msg)
     if val ~= nil then
         error((msg or "") .. " Expected nil, got " .. tostring(val))
+    end
+end
+
+local function assert_deep_equal(expected, actual, msg)
+    if type(expected) ~= type(actual) then
+        error((msg or "") .. " type mismatch: expected " .. type(expected) ..
+                  ", got " .. type(actual))
+    end
+    if type(expected) ~= 'table' then
+        if expected ~= actual then
+            error(
+                (msg or "") .. " Expected " .. tostring(expected) .. ", got " ..
+                    tostring(actual))
+        end
+        return
+    end
+    for k, v in pairs(expected) do
+        assert_deep_equal(v, actual[k], (msg or "") .. "[" .. tostring(k) .. "]")
+    end
+    for k, _ in pairs(actual) do
+        if expected[k] == nil then
+            error((msg or "") .. " unexpected key " .. tostring(k))
+        end
     end
 end
 
@@ -206,4 +225,246 @@ run_test("Resolves multiple modules independently", function()
     assert_true(ok, "Should succeed: " .. tostring(err))
     assert_equal("lib/mod1.lua", modules.mod1)
     assert_equal("src/mod2.c", modules.mod2.sources[1])
+end)
+
+-- ── table-valued variable resolution ────────────────────────────────────────
+
+run_test("Standalone $(VAR) where VAR is table → array result", function()
+    local modules = {
+        mymod = {
+            sources = {
+                "src/foo.c",
+            },
+            libraries = {
+                "$(MYLIBS)",
+            },
+        },
+    }
+    local ok, err = resolve_modvars(modules, {
+        MYLIBS = {
+            "ssl",
+            "crypto",
+        },
+    })
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_deep_equal({
+        "ssl",
+        "crypto",
+    }, modules.mymod.libraries)
+end)
+
+run_test('Embedded "-L$(VAR)" where VAR is table → mapped array', function()
+    local modules = {
+        mymod = {
+            sources = {
+                "src/foo.c",
+            },
+            libdirs = {
+                "-L$(MYDIR)",
+            },
+        },
+    }
+    local ok, err = resolve_modvars(modules, {
+        MYDIR = {
+            "/usr/lib",
+            "/usr/local/lib",
+        },
+    })
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_deep_equal({
+        "-L/usr/lib",
+        "-L/usr/local/lib",
+    }, modules.mymod.libdirs)
+end)
+
+run_test("Mixed string + table vars: $(A)/$(B) where A=string, B=table",
+         function()
+    local modules = {
+        mymod = {
+            sources = {
+                "src/foo.c",
+            },
+            libraries = {
+                "$(PREFIX)/$(LIBS)",
+            },
+        },
+    }
+    local ok, err = resolve_modvars(modules, {
+        PREFIX = "pkg",
+        LIBS = {
+            "ssl",
+            "crypto",
+        },
+    })
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_deep_equal({
+        "pkg/ssl",
+        "pkg/crypto",
+    }, modules.mymod.libraries)
+end)
+
+run_test("Multiple table-valued vars in one entry → cartesian product",
+         function()
+    local modules = {
+        mymod = {
+            sources = {
+                "src/foo.c",
+            },
+            libraries = {
+                "$(A)-$(B)",
+            },
+        },
+    }
+    local ok, err = resolve_modvars(modules, {
+        A = {
+            "1",
+            "2",
+        },
+        B = {
+            "3",
+            "4",
+        },
+    })
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_deep_equal({
+        "1-3",
+        "1-4",
+        "2-3",
+        "2-4",
+    }, modules.mymod.libraries)
+end)
+
+run_test("Optional $(VAR)? with empty table → nil (field deleted)", function()
+    local modules = {
+        mymod = {
+            sources = {
+                "src/foo.c",
+            },
+            incdirs = {
+                "$(MYINC)?",
+            },
+        },
+    }
+    local ok, err = resolve_modvars(modules, {
+        MYINC = {},
+    })
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_nil(modules.mymod.incdirs, "incdirs should be deleted")
+end)
+
+run_test("Table field with mixed entries: some table vars, some plain strings",
+         function()
+    local modules = {
+        mymod = {
+            sources = {
+                "src/foo.c",
+            },
+            libraries = {
+                "base",
+                "$(MYLIBS)",
+                "extra",
+            },
+        },
+    }
+    local ok, err = resolve_modvars(modules, {
+        MYLIBS = {
+            "ssl",
+            "crypto",
+        },
+    })
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_deep_equal({
+        "base",
+        "ssl",
+        "crypto",
+        "extra",
+    }, modules.mymod.libraries)
+end)
+
+run_test("Required field (sources) empty after table expansion → error",
+         function()
+    local modules = {
+        mymod = {
+            sources = {
+                "$(MYSRC)",
+            },
+        },
+    }
+    local ok, err = resolve_modvars(modules, {
+        MYSRC = {},
+    })
+    assert_false(ok)
+    assert_true(err:find("unresolved required variable") ~= nil,
+                "Error should mention unresolved required variable, got: " ..
+                    tostring(err))
+end)
+
+run_test("Standalone table var with non-table var mixed in same array",
+         function()
+    local modules = {
+        mymod = {
+            sources = {
+                "src/foo.c",
+            },
+            libraries = {
+                "$(LIB_A)",
+                "$(LIB_B)",
+            },
+        },
+    }
+    local ok, err = resolve_modvars(modules, {
+        LIB_A = {
+            "ssl",
+            "crypto",
+        },
+        LIB_B = "z",
+    })
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_deep_equal({
+        "ssl",
+        "crypto",
+        "z",
+    }, modules.mymod.libraries)
+end)
+
+run_test("Embedded table var with prefix and suffix text", function()
+    local modules = {
+        mymod = {
+            sources = {
+                "src/foo.c",
+            },
+            incdirs = {
+                "before/$(MYINC)/after",
+            },
+        },
+    }
+    local ok, err = resolve_modvars(modules, {
+        MYINC = {
+            "a",
+            "b",
+        },
+    })
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_deep_equal({
+        "before/a/after",
+        "before/b/after",
+    }, modules.mymod.incdirs)
+end)
+
+run_test("Table-valued var in string module path resolves to table", function()
+    local modules = {
+        mymod = "$(MYLIBS)",
+    }
+    local ok, err = resolve_modvars(modules, {
+        MYLIBS = {
+            "ssl",
+            "crypto",
+        },
+    })
+    -- String module path with table-valued var resolves to the table
+    assert_true(ok, "Should succeed: " .. tostring(err))
+    assert_deep_equal({
+        "ssl",
+        "crypto",
+    }, modules.mymod)
 end)

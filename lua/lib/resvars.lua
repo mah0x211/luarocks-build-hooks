@@ -30,8 +30,12 @@
 -- An empty string ("") in variables or os.getenv is treated as missing.
 --
 -- For string input:  returns nil if the final result is empty.
+--   When a variable value is a table, produces a cartesian product expansion:
+--   standalone $(VAR) returns the table as-is; embedded "-L$(VAR)" maps each
+--   element into the surrounding string.
 -- For table input:   returns a new table (does not modify the input).
 --   - Array elements resolving to nil are dropped (dense rebuild).
+--   - Array elements where resolve_str returns a table are flattened.
 --   - Map keys resolving to nil are omitted.
 --   - Empty child tables ({}) are preserved.
 --
@@ -43,85 +47,188 @@ local type = type
 local ipairs = ipairs
 local pairs = pairs
 local format = string.format
+local concat = table.concat
+
+--- Expand table-valued variable substitutions via cartesian product.
+--- Recursively substitutes each table-valued chunk with all its elements,
+--- collecting non-empty concatenated results.
+--- @param chunks table Array of string chunks with variable references as placeholders.
+--- @param tblvlist table Array of variable reference items with .chunkno and .val.
+--- @param idx? number Current position in tblvlist (default: 1).
+--- @param results? table Accumulator for non-empty concatenated strings (default: {}).
+--- @return table results Array of resolved non-empty strings (may be empty).
+local function cartesian_concat(chunks, tblvlist, idx, results)
+    idx = idx or 1
+    results = results or {}
+    if idx > #tblvlist then
+        local str = concat(chunks)
+        if #str > 0 then
+            results[#results + 1] = str
+        end
+        return results
+    end
+
+    local item = tblvlist[idx]
+    local chunk = chunks[item.chunkno]
+    for _, val in ipairs(item.val) do
+        chunks[item.chunkno] = val
+        cartesian_concat(chunks, tblvlist, idx + 1, results)
+    end
+    chunks[item.chunkno] = chunk
+    return results
+end
 
 -- Matches $(CONTENT)? where CONTENT contains no ) or whitespace.
 local OUTER_PAT = '%$%(([^)%s]+)%)(%??)'
-
 -- Modifier constants for the |env and :env suffixes.
 local OR_ENV = 1 -- try rockspec.variables, then os.getenv
 local FROM_ENV = 2 -- os.getenv only
-
 local MODIFIER = {
     ['|env'] = OR_ENV,
     [':env'] = FROM_ENV,
 }
 
---- Resolve a variable by name.  Empty strings are treated as missing.
---- When with_env is true, variables (if non-nil) is tried first, then
---- os.getenv. Passing variables=nil with with_env=true is the FROM_ENV case.
---- @param name string Variable name
---- @param variables table|nil rockspec.variables
---- @param with_env boolean|nil
---- @return string|nil
-local function resolve(name, variables, with_env)
-    local v
-    if with_env then
-        v = (variables and variables[name]) or os.getenv(name)
-    else
-        v = variables and variables[name]
+--- Parse the next $(VAR...) expression starting from `pos`.
+--- Returns item (a table with head, tail, name, val, or_env, from_env, optional)
+--- when a variable reference is found and resolved.
+--- Returns nil when no more patterns are found.
+--- Returns (nil, errmsg) when a required variable cannot be resolved.
+--- Unrecognized patterns (non-identifiers, unknown modifiers) are skipped
+--- via tail-recursive call to the next position.
+local function parse_next_variable(s, pos, variables)
+    assert(type(s) == 'string')
+    assert(type(pos) == 'number' and pos >= 1)
+    assert(type(variables) == 'table')
+
+    -- Find the next $(...) pattern starting from pos.
+    local head, tail, content, opt = s:find(OUTER_PAT, pos)
+    if not head then
+        return nil
     end
-    return (type(v) == 'string') and #v > 0 and v or nil
+
+    -- item will hold the parsed variable reference
+    local item = {
+        head = head,
+        tail = tail,
+        optional = opt == '?',
+    }
+
+    -- Parse the variable name (must be a LuaRocks-compatible identifier).
+    head, tail = content:find('^[%a][%w_]*')
+    if not head then
+        return parse_next_variable(s, item.tail + 1, variables)
+    end
+    item.name = content:sub(head, tail)
+
+    -- reminder after variable name, e.g. "|env"
+    local rest = content:sub(tail + 1)
+    -- check for supported modifiers
+    local mod = MODIFIER[rest]
+    local val
+    if #rest == 0 then
+        -- no modifier, default to rockspec.variables only
+        val = variables[item.name]
+    elseif mod == OR_ENV then
+        -- try rockspec.variables first, then os.getenv
+        item.or_env = true
+        val = variables[item.name] or os.getenv(item.name)
+    elseif mod == FROM_ENV then
+        -- os.getenv only
+        item.from_env = true
+        val = os.getenv(item.name)
+    else
+        -- unrecognized modifier, skip this pattern and continue searching
+        return parse_next_variable(s, item.tail + 1, variables)
+    end
+
+    -- Unwrap single-element tables to simplify downstream processing.
+    if type(val) == 'table' then
+        if #val > 1 then
+            -- Multiple values: keep as table for cartesian product expansion in cartesian_concat.
+            item.val = val
+            return item
+        end
+        -- use the single element directly, which also allows empty tables to resolve to nil
+        val = val[1]
+    end
+
+    -- Treat empty string as missing.
+    if type(val) == 'string' and #val > 0 then
+        item.val = val
+    elseif item.optional then
+        -- item.val may be nil for optional variables; caller will handle this case.
+        item.val = ''
+    else
+        -- For required variables, error immediately.
+        return nil, format('unresolved required variable %q',
+                           '$(' .. item.name .. rest .. ')')
+    end
+
+    return item
 end
 
 --- Resolve all $(VAR...) expressions in a string (single-pass).
---- Returns (resolved_string, nil) on success, or (nil, errmsg) on failure.
+--- Phase 1: parse all variable references, splitting the string into chunks
+---           of literal text and variable references.
+--- Phase 2: apply string-valued substitutions (chunk index replacement).
+--- Phase 3: expand table-valued variables via cartesian product on chunks.
+--- Returns (string|table|nil, nil) on success, or (nil, errmsg) on failure.
 --- Returns nil (not empty string) when the final result is empty.
 --- @param s string Input string
 --- @param variables table rockspec.variables
---- @return string|nil, string|nil
+--- @return string|table|nil, string|nil
 local function resolve_str(s, variables)
-    local errmsg
-    local result = s:gsub(OUTER_PAT, function(str, opt)
-        if errmsg then
-            return
-        end
+    local strvlist = {}
+    local tblvlist = {}
+    local vlist = {
+        string = strvlist,
+        table = tblvlist,
+    }
+    local chunks = {}
+    local cur = 1
 
-        -- Extract identifier: must start with a letter
-        local head, tail = str:find('^[%a][%w_]*')
-        if not head then
-            return -- no valid name: leave unchanged
+    -- Phase 1: parse all $(VAR) references and split into chunks
+    local item, err = parse_next_variable(s, cur, variables)
+    while item do
+        if item.head > cur then
+            chunks[#chunks + 1] = s:sub(cur, item.head - 1)
         end
-        local name = str:sub(head, tail)
-        str = str:sub(tail + 1) -- remainder is the modifier part
-        local mod = MODIFIER[str]
+        item.chunkno = #chunks + 1
+        chunks[item.chunkno] = s:sub(item.head, item.tail)
 
-        -- Resolve based on modifier
-        local v
-        if #str == 0 then
-            -- no modifier: vars only
-            v = resolve(name, variables)
-        elseif not mod then
-            return -- unknown modifier: leave unchanged
-        elseif mod == OR_ENV then
-            v = resolve(name, variables, true)
-        else -- FROM_ENV
-            v = resolve(name, nil, true)
-        end
+        -- NOTE: type of item.val is string, table; if optional variable not
+        -- found, it is set to '' which is a string. so, only string and table
+        -- types are expected here.
+        local list = assert(vlist[type(item.val)],
+                            'unexpected variable value type: ' .. type(item.val))
+        list[#list + 1] = item
 
-        if not v then
-            if opt == '?' then
-                return ''
-            end
-            errmsg = format('unresolved required variable %q',
-                            '$(' .. name .. str .. ')')
-            return
-        end
-        return v
-    end)
-    if errmsg then
-        return nil, errmsg
+        -- continue searching from the end of this pattern
+        cur = item.tail + 1
+        item, err = parse_next_variable(s, cur, variables)
     end
-    return #result > 0 and result or nil
+    if err then
+        return nil, err
+    end
+
+    -- append the remainder of the string after the last variable reference
+    if cur <= #s then
+        chunks[#chunks + 1] = s:sub(cur)
+    end
+
+    -- Phase 2: apply string-valued substitutions
+    for _, ref in ipairs(strvlist) do
+        chunks[ref.chunkno] = ref.val
+    end
+
+    -- Phase 3: expand table-valued variables via cartesian product
+    if #tblvlist == 0 then
+        local result = concat(chunks)
+        return #result > 0 and result or nil
+    end
+
+    local results = cartesian_concat(chunks, tblvlist)
+    return #results > 0 and results or nil
 end
 
 --- Build a new table with all string values resolved (single-pass).
@@ -151,6 +258,16 @@ local function rebuild_tbl(tbl, variables)
 
         if err then
             return nil, err
+        elseif type(resolved) == 'table' then
+            -- Flatten cartesian product results from resolve_str;
+            -- preserve nested table rebuilds as-is.
+            if type(v) == 'string' then
+                for _, elem in ipairs(resolved) do
+                    result[#result + 1] = elem
+                end
+            else
+                result[#result + 1] = resolved
+            end
         elseif resolved ~= nil then
             result[#result + 1] = resolved
         end
